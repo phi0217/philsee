@@ -1,0 +1,101 @@
+脚本 2：minio_upload.py 开发提示词
+功能描述
+实现异步上传图片到 MinIO 对象存储的功能。将图片 bytes 上传到指定桶，返回对象路径（bucket/object_name）。该脚本使用 MinIO Python SDK，并通过 asyncio.to_thread 将同步操作包装为异步，避免阻塞事件循环。
+
+输入参数
+image_bytes: 图片的原始字节数据（bytes）
+
+bucket: 存储桶名称（str）
+
+object_name: 对象名称（例如 trace_id/page_1.jpg）
+
+endpoint: MinIO 服务端点（str，如 localhost:9000）
+
+access_key: 访问密钥（str）
+
+secret_key: 秘密密钥（str）
+
+secure: 是否使用 HTTPS（bool，默认 False）
+
+region: 可选区域（str，默认 None）
+
+输出
+成功时返回对象路径（字符串，格式：{bucket}/{object_name}）
+
+失败时抛出异常（由调用方处理）
+
+依赖库
+minio (MinIO Python SDK)
+
+asyncio
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数签名：
+
+python
+async def upload_to_minio(
+    image_bytes: bytes,
+    bucket: str,
+    object_name: str,
+    endpoint: str,
+    access_key: str,
+    secret_key: str,
+    secure: bool = False,
+    region: str = None
+) -> str
+实现步骤：
+
+创建 Minio 客户端（同步）。
+检查桶是否存在，若不存在则自动创建（bucket_exists + make_bucket）。
+使用 asyncio.to_thread 执行 client.put_object（需要构造一个 io.BytesIO 对象，并指定长度和内容类型）。
+返回对象路径。
+错误处理：捕获 MinioException 并记录详细错误，然后重新抛出（或抛出自定义异常）。
+
+日志：使用 logging.getLogger(__name__)，记录上传成功或失败的信息，包括对象名和桶名。
+
+提供测试入口：从命令行读取本地图片文件路径和 MinIO 连接信息（通过环境变量或硬编码测试值），执行上传并打印结果。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import asyncio
+    import os
+    import sys
+    
+    async def test():
+        if len(sys.argv) < 2:
+            print("Usage: python minio_upload.py <image_path>")
+            return
+        with open(sys.argv[1], "rb") as f:
+            img = f.read()
+        endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+        access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+        secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+        bucket = "test-bucket"
+        object_name = "test_upload.jpg"
+        path = await upload_to_minio(
+            img, bucket, object_name,
+            endpoint, access_key, secret_key, secure=False
+        )
+        print(f"Uploaded to {path}")
+    
+    asyncio.run(test())
+预期行为
+首次运行时会自动创建桶（如果不存在）。
+
+上传成功返回字符串 test-bucket/test_upload.jpg。
+
+如果连接失败或权限错误，打印异常信息。
+
+注意事项
+使用 asyncio.to_thread 将同步的 MinIO 操作移到线程池中执行，避免阻塞异步主循环。
+
+设置 Content-Type: image/jpeg，如果图片实际为其他格式，可根据文件扩展名自动判断或固定为 application/octet-stream。
+
+对象的长度必须准确传递，否则上传可能失败。
+
+不要依赖外部配置文件，所有参数通过函数参数传递（便于后续融合）。
+
+请根据以上要求生成 minio_upload.py 的完整代码。

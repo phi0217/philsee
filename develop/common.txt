@@ -1,0 +1,22 @@
+Python 3.11+，使用 async/await 异步编程（数据库、HTTP请求）。
+
+可能用到的中间件的docker本机启动配置在：/Users/mac/Documents/program/docker-compose.yml
+
+类型注解完整（from typing import ...）。
+
+日志使用 logging，每个脚本可独立配置。
+
+所有函数提供 docstring。
+
+错误处理：捕获异常并记录，不静默失败。
+
+配置文件读取：暂不实现，所有连接参数通过环境变量或参数传入。
+
+脚本生成到/Users/mac/Documents/workspace/philsee/script文件夹
+
+生成完毕后自动跟踪并提交
+/Users/mac/Documents/workspace/philsee
+这个目录下的变更项，并用git打一个名称和脚本名字相同然后带有当前时间的tag
+
+
+提交完成后进行测试，测试脚本功能

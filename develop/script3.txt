@@ -1,0 +1,103 @@
+功能描述
+从 MySQL 数据库的 config_versions 表中加载指定单据类型（doc_type）的配置，包括：
+
+全局字段定义（fields）
+
+单据类型的字段提取策略（profile）
+
+跨页聚合规则（aggregation）
+
+支持加载当前激活版本（is_active=True）或指定版本标签（version）。返回一个合并后的字典，供后续处理使用。
+
+输入参数
+db_url: 数据库连接 URL（字符串，如 mysql+aiomysql://user:pass@localhost:3306/philsee）
+
+doc_type: 单据类型（字符串，如 "letter_of_credit"）
+
+version: 可选，指定配置版本标签（如 "v1.0.0"），若为 None 则加载激活版本
+
+输出
+返回一个字典，结构为：
+
+python
+{
+    "fields_schema": {...},      # 全局字段定义，来自 config_type='fields' 的 content
+    "profile": {...},            # 该 doc_type 的字段策略，来自 config_type='profile' 的 content
+    "agg_rules": {...}           # 该 doc_type 的聚合规则，若不存在则使用 doc_type='*' 的全局规则
+}
+依赖库
+sqlalchemy[asyncio] (2.0+)
+
+aiomysql
+
+asyncio
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数签名：
+
+python
+async def load_config(
+    db_url: str,
+    doc_type: str,
+    version: Optional[str] = None
+) -> dict[str, Any]
+实现步骤：
+
+使用 create_async_engine 创建异步引擎。
+使用 async_sessionmaker 创建会话。
+查询 config_versions 表：
+条件：doc_type IN (:doc_type, '*')，config_type IN ('fields','profile','aggregation')，is_deleted=False。
+若指定 version，则 version_tag = :version；否则 is_active=True。
+分别提取三种类型的配置内容：
+fields 的 doc_type 应为 '*'（全局）。
+profile 的 doc_type 应为传入的 doc_type。
+aggregation 优先取 doc_type 匹配的，若不存在则取 doc_type='*' 的默认规则。
+若缺少必要配置（如 fields 或 profile），抛出 ValueError。
+关闭引擎。
+错误处理：捕获 SQLAlchemy 异常，记录日志，并重新抛出或转换为自定义异常。
+
+日志：使用 logging.getLogger(__name__)，记录加载的版本和配置摘要。
+
+提供测试入口：使用测试数据库连接，打印加载的配置键。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import asyncio
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    async def test():
+        db_url = "mysql+aiomysql://testuser:testpass@localhost:3306/testdb"
+        config = await load_config(db_url, "letter_of_credit")
+        print("Fields schema keys:", list(config["fields_schema"].keys()))
+        print("Profile fields:", list(config["profile"].get("fields", {}).keys()))
+        print("Agg rules:", config["agg_rules"])
+    
+    asyncio.run(test())
+数据库表结构（参考）
+sql
+CREATE TABLE config_versions (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    version_tag VARCHAR(64) NOT NULL,
+    doc_type VARCHAR(32) NOT NULL,
+    config_type ENUM('fields','profile','aggregation') NOT NULL,
+    content JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(64),
+    is_active BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    UNIQUE KEY uk_active (doc_type, config_type, is_active)
+);
+注意事项
+配置文件内容（content 字段）是 JSON 格式，需要解析为 Python dict。
+
+确保异步引擎在使用后正确关闭，避免连接泄漏。
+
+如果指定的 doc_type 没有对应的 profile 配置，应明确报错。
+
+聚合规则允许回退到全局默认（doc_type='*'），但 fields 和 profile 不支持回退。
+
+请根据以上要求生成 config_loader.py 的完整代码。

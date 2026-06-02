@@ -1,0 +1,78 @@
+脚本 1：image_preprocess.py 开发提示词
+功能描述
+实现图像预处理功能：将原始图片缩放到指定的短边长度（保持宽高比），输出 JPEG 格式（质量 85），并转换为 base64 字符串（带 data URL 前缀）。该脚本是基础工具，供后续模块调用。
+
+输入
+原始图片 bytes
+
+目标短边长度（整数，默认 1024）
+
+输出
+缩放后的图片 bytes
+
+base64 字符串（格式：data:image/jpeg;base64,<base64>）
+
+依赖库
+opencv-python (cv2)
+
+Pillow (PIL) – 可选，但建议使用 OpenCV 处理
+
+numpy – 用于数组转换
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数命名：
+
+python
+def preprocess_image(image_bytes: bytes, target_short_edge: int = 1024) -> bytes
+def encode_to_base64(image_bytes: bytes) -> str
+实现细节：
+
+使用 cv2.imdecode 读取 bytes 为 OpenCV 图像（BGR）。
+计算缩放比例：短边 / target_short_edge，长边按相同比例缩放。
+使用 cv2.resize 进行缩放。
+编码为 JPEG：cv2.imencode('.jpg', img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])。
+获取编码后的 bytes。
+encode_to_base64 函数将图片 bytes 进行 base64 编码，并拼接 data:image/jpeg;base64, 前缀。
+错误处理：若图片格式不支持，抛出 ValueError 并记录日志。
+
+日志：使用 logging.getLogger(__name__)，记录缩放前后的尺寸。
+
+提供测试入口：读取命令行传入的图片文件路径，执行预处理并输出 base64 的前 200 字符。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import sys
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    if len(sys.argv) < 2:
+        print("Usage: python image_preprocess.py <image_path>")
+        sys.exit(1)
+    
+    with open(sys.argv[1], "rb") as f:
+        raw = f.read()
+    
+    resized = preprocess_image(raw, target_short_edge=1024)
+    b64 = encode_to_base64(resized)
+    
+    print(f"Original size: {len(raw)} bytes")
+    print(f"Resized size: {len(resized)} bytes")
+    print(f"Base64 prefix: {b64[:100]}...")
+预期输出
+脚本可直接运行，输出预处理后的图片大小和 base64 前几个字符。
+
+无外部依赖配置（不需要数据库、MinIO、VLM 等）。
+
+注意事项
+确保缩放后的图片短边严格等于 target_short_edge（可能因整数取整有 1 像素偏差，允许）。
+
+保持宽高比，长边按比例缩放。
+
+输出 JPEG 质量 85 是经验值，可平衡清晰度和文件大小。
+
+所有函数应包含 docstring。
+
+请根据以上提示生成 image_preprocess.py 的完整代码。
