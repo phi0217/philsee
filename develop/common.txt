@@ -19,4 +19,6 @@ Python 3.11+，使用 async/await 异步编程（数据库、HTTP请求）。
 这个目录下的变更项，并用git打一个名称和脚本名字相同然后带有当前时间的tag
 
 
-提交完成后进行测试，测试脚本功能
+提交完成后进行测试，
+
+（可选：使用 /Users/mac/Documents/workspace/philsee/sample 中的图片测试脚本功能，不需要非要每张图片都测，只要满足测试的目的即可）
