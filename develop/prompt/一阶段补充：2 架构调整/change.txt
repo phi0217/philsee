@@ -1,0 +1,208 @@
+项目改造提示词：配置模板化 + 分流决策追踪（删库重建，无外键约束）
+当前系统已完成基础功能，但配置管理存在局限，需要升级为模板化配置，并支持按权重分流。同时要求在 requests 表中增加 trace 字段，记录详细的分流决策过程，便于调试和 A/B 测试分析。
+
+改造方式：直接删除现有数据库并重建（不提供迁移脚本），使用全新的表结构。所有旧数据丢失，开发阶段可接受。
+
+一、数据库初始化 SQL（sql/init_db.sql）
+以下 SQL 包含：
+
+删除旧表（如果存在）
+
+创建新表：config_versions（无 is_active）、config_templates、requests（增加字段）、field_extractions、agg_decisions
+
+插入初始配置示例（可选）
+
+sql
+-- 删除旧表（顺序重要，先删有外键依赖的）
+DROP TABLE IF EXISTS agg_decisions;
+DROP TABLE IF EXISTS field_extractions;
+DROP TABLE IF EXISTS requests;
+DROP TABLE IF EXISTS config_templates;
+DROP TABLE IF EXISTS config_versions;
+
+-- ==================== 配置版本表 ====================
+CREATE TABLE config_versions (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    version_tag VARCHAR(64) NOT NULL COMMENT '版本标识，如 v1.0.0',
+    doc_type VARCHAR(64) NOT NULL COMMENT 'fields 时固定为 *；profile/aggregation 时为具体文档类型',
+    config_type ENUM('fields','profile','aggregation') NOT NULL,
+    content JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(64),
+    is_deleted BOOLEAN DEFAULT FALSE,
+    UNIQUE KEY uk_unique (doc_type, config_type, version_tag)
+);
+
+-- ==================== 配置模板表 ====================
+CREATE TABLE config_templates (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    template_id VARCHAR(64) NOT NULL COMMENT '模板编号，如 invoice_extraction',
+    version VARCHAR(32) NOT NULL COMMENT '模板版本，如 v1.0.0',
+    doc_type VARCHAR(64) NOT NULL COMMENT '适用的文档类型，如 invoice',
+    description TEXT COMMENT '模板说明',
+    fields_config_id INT NOT NULL COMMENT '关联 config_versions.id (config_type=fields)',
+    profile_config_id INT NOT NULL COMMENT '关联 config_versions.id (config_type=profile)',
+    aggregation_config_id INT NOT NULL COMMENT '关联 config_versions.id (config_type=aggregation)',
+    is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+    weight INT NOT NULL DEFAULT 0 COMMENT '分流权重（0-100），同一 template_id 下所有 is_active=1 的版本权重和应为 100',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(64),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_by VARCHAR(64),
+    UNIQUE KEY uk_template_version (template_id, version),
+    KEY idx_doc_type (doc_type),
+    KEY idx_active (template_id, is_active)
+);
+
+-- ==================== 请求主表（增加字段） ====================
+CREATE TABLE requests (
+    trace_id VARCHAR(64) PRIMARY KEY,
+    doc_type VARCHAR(64) NOT NULL,
+    total_pages INT,
+    final_fields JSON,
+    warnings JSON,
+    template_id VARCHAR(64) COMMENT '实际使用的模板编号',
+    template_version VARCHAR(32) COMMENT '实际使用的模板版本',
+    selected_weight INT COMMENT '命中模板版本的权重',
+    trace JSON COMMENT '分流决策详细记录',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ==================== 字段提取明细表 ====================
+CREATE TABLE field_extractions (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    trace_id VARCHAR(64) NOT NULL,
+    page_num INT NOT NULL,
+    field_name VARCHAR(64) NOT NULL,
+    extracted_value TEXT,
+    confidence FLOAT,
+    raw_response TEXT,
+    minio_path VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX(trace_id, page_num)
+);
+
+-- ==================== 聚合决策表 ====================
+CREATE TABLE agg_decisions (
+    trace_id VARCHAR(64) NOT NULL,
+    field_name VARCHAR(64) NOT NULL,
+    selected_page INT,
+    selected_value TEXT,
+    reason VARCHAR(255),
+    candidates JSON,
+    PRIMARY KEY(trace_id, field_name)
+);
+
+-- 可选：插入一个示例全局 fields 配置（方便测试）
+INSERT INTO config_versions (version_tag, doc_type, config_type, content, created_by)
+VALUES ('v1.0.0', '*', 'fields', '{"fields": {"amount": {"type": "number"}, "currency": {"type": "string"}}}', 'init');
+
+-- 可选：插入一个示例 profile 和 aggregation，以及一个默认模板
+-- （具体内容根据实际业务补充）
+二、代码改造要求
+现有代码中所有对 config_versions 表的 is_active 引用必须删除。系统启动后，通过 config_templates 表管理生效的配置组合。
+
+1. config_loader.py 改造
+新增/修改函数：
+
+python
+async def get_config_by_id(config_id: int) -> dict:
+    """根据 config_versions.id 获取配置内容（JSON 解析后的 dict）"""
+    # 查询 config_versions 表，返回 content 字段的 Python 对象
+
+async def get_active_templates(template_id: str = None, doc_type: str = None) -> List[dict]:
+    """获取符合条件的激活模板列表（is_active=1）"""
+    # 可组合条件查询
+
+async def select_template(template_id: str, doc_type: str = None) -> Tuple[dict, dict]:
+    """
+    根据权重随机选择一个模板版本。
+    返回 (模板记录, trace_dict)
+    trace_dict 包含 candidates, random_value, selected_index, decision, fallback_used
+    """
+    # 实现加权随机选择
+    # 若权重和不为100，记录警告并调整概率
+
+async def resolve_template(doc_type: str, force_template_id: str = None) -> Tuple[dict, dict]:
+    """
+    解析请求参数，确定最终使用的模板。
+    兼容旧用法：若只有 doc_type，需要通过配置映射到默认 template_id。
+    返回 (模板记录, trace_dict)
+    """
+    # 实现 doc_type 到 template_id 的默认映射（例如从配置文件读取 DEFAULT_TEMPLATE_MAP）
+修改原有 load_config 函数（如果存在），使其通过模板加载配置：
+
+python
+async def load_config(doc_type: str = None, template_id: str = None):
+    template, trace = await resolve_template(doc_type, template_id)
+    fields = await get_config_by_id(template['fields_config_id'])
+    profile = await get_config_by_id(template['profile_config_id'])
+    agg = await get_config_by_id(template['aggregation_config_id'])
+    return fields, profile, agg, template, trace
+2. main_api.py 改造
+从请求中获取 doc_type 和 template_id（至少一个）。
+
+调用 resolve_template 获得 template 和 trace。
+
+通过 get_config_by_id 加载三个配置。
+
+执行原有处理逻辑。
+
+在调用 save_results 时，传入 template_id, template_version, selected_weight, trace。
+
+3. db_writer.py 改造
+save_results 函数签名增加 template_id, template_version, selected_weight, trace 参数。
+
+将这些字段写入 requests 表。
+
+4. 配置管理工具 (config_ui.py) 改造
+移除原有 is_active 相关界面。
+
+新增“模板管理”选项卡：
+
+展示所有模板版本（按 template_id 分组）。
+
+支持创建新模板版本：从下拉列表选择 fields_config_id、profile_config_id、aggregation_config_id（这些 ID 来自 config_versions 表）。
+
+支持编辑模板的 weight、is_active、description。
+
+显示同一 template_id 下所有激活版本的权重和，如果不足或超过 100 给出警告。
+
+保留“配置版本管理”选项卡，用于对 config_versions 表进行增删改查（不再涉及激活状态）。
+
+5. 请求兼容处理
+由于旧客户端可能只传 doc_type，需要在系统中维护一个 doc_type 到默认 template_id 的映射。建议通过配置文件（如 settings.yaml）或环境变量设置：
+
+yaml
+default_templates:
+  invoice: "invoice_extraction_v1"
+  letter_of_credit: "lc_extraction_v1"
+在 resolve_template 中实现此映射逻辑。
+
+三、注意事项
+不添加外键约束，应用层需保证 fields_config_id 等指向存在的 config_versions.id。
+
+删除 is_active 后，所有配置版本均为历史，只有被模板引用的版本才会被使用。
+
+权重和校验：建议在模板保存时进行前端校验，后端保存时也应检查并记录警告，但不强制拒绝。
+
+所有数据库操作使用异步 SQLAlchemy 或 aiomysql，注意事务。
+
+四、输出要求
+请根据以上说明，生成完整的代码改造内容，包括：
+
+sql/init_db.sql（完整初始化脚本，删除旧表并创建新表，包含索引和示例数据）。
+
+online/config_loader.py（完整代码，实现上述所有函数）。
+
+online/main_api.py（关键修改部分的代码片段或完整文件）。
+
+online/db_writer.py（修改后的完整代码，增加新参数）。
+
+config_ui.py（增加模板管理功能的 Streamlit 代码）。
+
+README.md（更新配置管理说明和 API 使用方法）。
+
+确保代码无语法错误，兼容现有功能，并添加必要的注释。不要生成迁移脚本。
+
+开始生成。
