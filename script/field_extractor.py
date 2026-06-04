@@ -69,6 +69,7 @@ async def extract_field(
     # 构建用户提示词
     user_prompt = f"请提取字段 '{field_name}'。{prompt_hint} 只输出字段值，不要额外解释。"
 
+    # TODO(High): 架构合并后这部分要做成可配置化
     # 提取 VLM 配置参数
     endpoint = vlm_config.get(
         "endpoint",

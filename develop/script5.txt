@@ -1,0 +1,104 @@
+脚本 5：field_extractor.py 开发提示词
+功能描述
+实现单个字段的 VLM 提取逻辑：根据字段配置（包含字段名、类型、提示词等），调用 VLM 客户端获取原始响应，然后根据字段类型（string、number、list、object）进行解析和转换。支持对 list 和 object 类型的 JSON 输出进行自动解析，解析失败时重试一次。最终返回提取的值、置信度和原始响应字符串。
+
+输入参数
+image_base64: 图片的 base64 字符串（已包含 data:image/jpeg;base64, 前缀）
+
+field_config: 字段配置字典，至少包含以下键：
+
+field_name (str): 字段名称
+
+type (str): 字段类型，取值为 "string", "number", "list", "object"
+
+prompt_hint (str): 辅助提示词，用于指导 VLM 提取
+
+可选：item_schema (dict) 或 properties (dict) 用于嵌套类型（本阶段不强制使用，但可预留）
+
+vlm_config: VLM 客户端配置字典，包含 endpoint, model, api_key, max_tokens, temperature, max_retries, timeout 等（直接传递给 call_vlm）
+
+system_prompt: 可选，覆盖默认系统提示词
+
+输出
+返回一个元组 (value: Any, confidence: float, raw_response: str)：
+
+value: 解析后的值（类型根据字段类型决定；若无法解析或失败，返回 None）
+
+confidence: 置信度（浮点数，来自 VLM 客户端或降级值）
+
+raw_response: VLM 返回的原始字符串（未解析前）
+
+依赖库
+vlm_client (脚本4中的 call_vlm 函数)
+
+json
+
+typing
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数签名：
+
+python
+async def extract_field(
+    image_base64: str,
+    field_config: dict[str, any],
+    vlm_config: dict[str, any],
+    system_prompt: Optional[str] = None
+) -> tuple[any, float, str]
+实现步骤：
+
+从 field_config 中提取 field_name, field_type, prompt_hint。
+构建用户提示词：
+python
+user_prompt = f"请提取字段 '{field_name}'。{prompt_hint} 只输出字段值，不要额外解释。"
+调用 call_vlm（传入 image_base64, user_prompt, system_prompt, 以及 vlm_config 中的参数），得到 (raw_response, confidence)。
+根据 field_type 进行解析：
+"string": 直接返回 raw_response.strip()（保留原始内容，不做额外转换）。
+"number": 尝试将 raw_response.strip() 转换为 float（支持整数）。若转换失败，返回 None 并记录警告。
+"list" 或 "object": 尝试 json.loads(raw_response)。若解析失败且 max_retries > 0，则重试一次（再次调用 VLM，但可在提示词中强调“只输出合法JSON”）。若仍失败，返回 None 并记录错误。
+返回 (value, confidence, raw_response)。
+错误处理：捕获 json.JSONDecodeError，记录日志；捕获 VLM 调用异常并向上传递（或返回 None，根据设计决定）。
+
+日志：使用 logging.getLogger(__name__)，记录字段名、解析成功/失败信息、重试情况。
+
+提供测试入口：模拟 VLM 响应，测试不同字段类型的解析逻辑。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import asyncio
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # 模拟 VLM 客户端（需实现 call_vlm 的 mock）
+    async def mock_call_vlm(*args, **kwargs):
+        # 模拟返回 JSON 字符串
+        return ('[{"hs_code": "8471", "description": "Laptop"}]', 0.9)
+    
+    # 临时替换 import 或者直接测试函数（需手动 mock）
+    async def test():
+        cfg = {
+            "field_name": "commodities",
+            "type": "list",
+            "prompt_hint": "输出货物清单JSON数组"
+        }
+        vlm_cfg = {"endpoint": "mock", "max_retries": 1}
+        value, conf, raw = await extract_field(
+            "data:image/jpeg;base64,...", cfg, vlm_cfg,
+            system_prompt="You are an expert."
+        )
+        print(value, conf, raw)
+    
+    asyncio.run(test())
+注意事项
+对于 list 和 object 类型，重试时需要保持相同的图片 base64 和基本提示，但可以在用户提示中追加“请确保输出合法JSON”等字样（由 field_config 中的 prompt_hint 包含）。
+
+本脚本不关心聚合逻辑，只负责单个字段的独立提取。
+
+若字段配置中未提供 type，默认视为 "string"。
+
+数字转换支持科学计数法？本阶段仅支持整数和小数点形式；可简单使用 float() 转换，捕获 ValueError。
+
+请根据以上要求生成 field_extractor.py 的完整代码。
