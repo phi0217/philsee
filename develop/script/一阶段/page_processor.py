@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Any, Optional
 
-from develop.script.field_extractor import extract_field, FieldExtractionError
+from develop.script.一阶段.field_extractor import extract_field, FieldExtractionError
 
 logger = logging.getLogger(__name__)
 

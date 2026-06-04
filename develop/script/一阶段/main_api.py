@@ -17,14 +17,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # 导入各模块
-from develop.script.aggregator import aggregate_results
-from develop.script.config_loader import load_config, ConfigLoadError
-from develop.script.db_writer import save_results, create_tables, DatabaseWriterError
-from develop.script.field_extractor import FieldExtractionError
-from develop.script.image_preprocess import encode_to_base64, preprocess_image
-from develop.script.minio_upload import upload_to_minio, MinioUploadError
-from develop.script.page_processor import process_page
-from develop.script.trace_manager import TraceManager
+from develop.script.一阶段.aggregator import aggregate_results
+from develop.script.一阶段.config_loader import load_config, ConfigLoadError
+from develop.script.一阶段.db_writer import save_results, create_tables, DatabaseWriterError
+from develop.script.一阶段.field_extractor import FieldExtractionError
+from develop.script.一阶段.image_preprocess import encode_to_base64, preprocess_image
+from develop.script.一阶段.minio_upload import upload_to_minio, MinioUploadError
+from develop.script.一阶段.page_processor import process_page
+from develop.script.一阶段.trace_manager import TraceManager
 
 # 配置日志
 logging.basicConfig(

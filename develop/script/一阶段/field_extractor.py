@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from develop.script.vlm_client import VLMError, call_vlm
+from develop.script.一阶段.vlm_client import VLMError, call_vlm
 
 logger = logging.getLogger(__name__)
 

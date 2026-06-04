@@ -1,0 +1,118 @@
+提示词：为通用文档解析系统开发 Streamlit 配置管理工具
+你正在开发一个通用的文档解析系统（项目名 philsee），该系统通过配置驱动的方式从各种类型的文档（如发票、合同、报关单、医疗表单、国际结算单据等）中提取结构化字段。配置存储在 MySQL 数据库的 config_versions 表中，包含三种配置类型：fields（全局字段定义）、profile（某文档类型的提取策略）、aggregation（跨页聚合规则）。你需要一个 Streamlit 应用 来管理这些配置，实现对配置的查看、编辑、版本管理（增、改、激活历史版本），避免手动编写 SQL。系统应具有通用性，不预设特定文档类型。
+
+任务目标
+生成一个完整的、可直接运行的 Streamlit 应用文件 config_ui.py，实现以下功能。
+
+技术栈
+Python 3.11
+
+Streamlit
+
+PyMySQL（或其他 MySQL 驱动）
+
+json（标准库）
+
+datetime
+
+数据库连接
+假设 MySQL 运行在 localhost:3306，数据库名 philsee，用户名 root，密码 password（请在代码中允许通过环境变量或直接修改变量来配置，但提供默认值以便测试）。表 config_versions 结构如下（只读，你不需要创建表，仅执行查询和插入/更新）：
+
+sql
+CREATE TABLE config_versions (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    version_tag VARCHAR(64) NOT NULL,
+    doc_type VARCHAR(64) NOT NULL,   -- 文档类型标识，如 'invoice', 'contract', 'medical_form' 等，使用 '*' 表示全局
+    config_type ENUM('fields','profile','aggregation') NOT NULL,
+    content JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(64),
+    is_active BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE
+);
+核心功能要求
+侧边栏选择：
+
+选择 doc_type：提供一个文本输入框（text_input）让用户手动输入文档类型标识（例如 invoice、contract、*），同时提供一组常用示例的快捷选择（可选，但不硬编码具体业务）。推荐使用 selectbox 让用户从已有类型中选择，并允许添加新类型（可通过输入实现）。
+
+选择 config_type：使用 selectbox，选项 fields, profile, aggregation。
+
+展示当前激活配置：
+
+从数据库查询 is_active = 1 且匹配 doc_type 和 config_type 的记录。
+
+显示其 version_tag 和 content（将 content JSON 格式化展示，使用 st.json 或 st.code）。
+
+如果没有激活配置，显示警告。
+
+编辑并保存为新版本：
+
+提供一个文本区域（st.text_area），预填充当前激活配置的 JSON 字符串（若没有则显示 {}）。
+
+用户可修改 JSON 内容。
+
+输入新版本号（version_tag，如 v1.0.1）和创建者（created_by，默认为 "streamlit"）。
+
+点击“保存为新版本”按钮后：
+
+校验 JSON 格式合法性（json.loads）。
+
+通用格式校验（不针对特定业务）：
+
+当 config_type = 'fields' 时，推荐 JSON 包含顶层键 "fields"，但不是强制（可仅警告）。若存在 "fields" 键，则其值应为对象。
+
+当 config_type = 'profile' 时，推荐 JSON 包含顶层键 "doc_type" 和 "fields"，若缺少则给出警告，但允许保存。
+
+当 config_type = 'aggregation' 时，推荐 JSON 是一个对象，至少有一个键值对。
+
+通过校验后，开启数据库事务：
+
+将同 (doc_type, config_type) 的所有记录的 is_active 设为 0。
+
+插入新记录，is_active = 1，version_tag、created_by、created_at 使用当前时间。
+
+保存成功后刷新页面或显示成功消息。
+
+如果失败，回滚事务并显示错误。
+
+历史版本列表：
+
+展示该 (doc_type, config_type) 的所有版本（按 id DESC 排序）。
+
+每行显示：version_tag、created_at、created_by、is_active（标记是否为当前激活）。
+
+对于非激活版本，提供一个“激活此版本”按钮。
+
+点击“激活”时：
+
+将该版本 is_active 设为 1，同时将同组其他版本的 is_active 设为 0。
+
+成功后刷新页面。
+
+其他要求：
+
+使用 st.set_page_config 设置页面标题和布局（layout="wide"）。
+
+适当使用 st.divider、st.info、st.success、st.error 等增强用户体验。
+
+数据库连接使用函数 get_db_connection()，返回 pymysql.connect 对象，支持字典游标（DictCursor）。
+
+所有数据库操作应包含异常处理，并在出错时回滚。
+
+通用性说明：
+
+不预设任何具体文档类型（如“信用证”）。示例 doc_type 使用 '*' 和占位符 'example_doc' 等。
+
+代码中的提示文字、默认值不应涉及特定业务领域。
+
+代码风格与结构
+提供完整代码，包含 import、函数定义、主入口 if __name__ == "__main__": main()。
+
+代码注释充分，特别是数据库操作和校验逻辑。
+
+避免过于复杂的嵌套，保持可读性。
+
+输出
+仅输出 config_ui.py 的完整代码，无需解释。确保代码可以直接复制保存为 .py 文件，并在安装 streamlit、pymysql 后通过 streamlit run config_ui.py 运行。
+
+开始生成。

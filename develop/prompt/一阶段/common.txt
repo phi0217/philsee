@@ -12,7 +12,9 @@ Python 3.11+，使用 async/await 异步编程（数据库、HTTP请求）。
 
 配置文件读取：暂不实现，所有连接参数通过环境变量或参数传入。
 
-脚本生成到/Users/mac/Documents/workspace/philsee/script文件夹
+脚本生成到
+/Users/mac/Documents/workspace/philsee/develop/script/一阶段
+文件夹
 
 生成完毕后自动跟踪并提交
 /Users/mac/Documents/workspace/philsee
