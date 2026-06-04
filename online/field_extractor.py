@@ -44,10 +44,11 @@ async def extract_field(
             - endpoint (str): VLM 服务端点
             - model (str): 模型名称
             - api_key (str): API 密钥
-            - max_tokens (int): 最大生成 token 数
+            - max_tokens (int | None): 最大生成 token 数，None 表示不限制
             - temperature (float): 温度参数
             - max_retries (int): 最大重试次数
             - timeout (float): 超时秒数
+            - enable_thinking (bool): 是否启用思考模式
         system_prompt: 可选，覆盖默认系统提示词。
 
     Returns:
@@ -77,6 +78,7 @@ async def extract_field(
     temperature = vlm_config.get("temperature")
     max_retries = vlm_config.get("max_retries")
     timeout = vlm_config.get("timeout")
+    enable_thinking = vlm_config.get("enable_thinking", False)
 
     try:
         # 第一次调用 VLM
@@ -91,6 +93,7 @@ async def extract_field(
             temperature=temperature,
             max_retries=max_retries,
             timeout=timeout,
+            enable_thinking=enable_thinking,
         )
 
         # 根据字段类型解析响应
@@ -120,6 +123,7 @@ async def extract_field(
                     temperature=temperature,
                     max_retries=max_retries,
                     timeout=timeout,
+                    enable_thinking=enable_thinking,
                 )
 
                 value = _parse_response(raw_response, field_type)

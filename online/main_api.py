@@ -48,10 +48,13 @@ class AppConfig:
         self.vlm_endpoint = self._get_required_env("VLM_ENDPOINT")
         self.vlm_model = self._get_required_env("VLM_MODEL")
         self.vlm_api_key = self._get_required_env("VLM_API_KEY")
-        self.vlm_max_tokens = int(os.getenv("VLM_MAX_TOKENS", "1024"))
+        # max_tokens: -1 或空表示不限制
+        max_tokens_str = os.getenv("VLM_MAX_TOKENS", "-1").strip()
+        self.vlm_max_tokens = None if max_tokens_str in ("-1", "", "none", "None") else int(max_tokens_str)
         self.vlm_temperature = float(os.getenv("VLM_TEMPERATURE", "0.0"))
         self.vlm_timeout = float(os.getenv("VLM_TIMEOUT", "30.0"))
         self.vlm_max_retries = int(os.getenv("VLM_MAX_RETRIES", "2"))
+        self.vlm_enable_thinking = os.getenv("VLM_ENABLE_THINKING", "false").lower() == "true"
 
         # MinIO 配置
         self.minio_endpoint = self._get_required_env("MINIO_ENDPOINT")
@@ -90,10 +93,11 @@ class AppConfig:
             "endpoint": self.vlm_endpoint,
             "model": self.vlm_model,
             "api_key": self.vlm_api_key,
-            "max_tokens": self.vlm_max_tokens,
+            "max_tokens": self.vlm_max_tokens if self.vlm_max_tokens and self.vlm_max_tokens > 0 else None,
             "temperature": self.vlm_temperature,
             "timeout": self.vlm_timeout,
             "max_retries": self.vlm_max_retries,
+            "enable_thinking": self.vlm_enable_thinking,
         }
 
 

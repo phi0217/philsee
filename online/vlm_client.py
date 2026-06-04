@@ -29,10 +29,11 @@ async def call_vlm(
     endpoint: str,
     model: str,
     api_key: str,
-    max_tokens: int,
+    max_tokens: Optional[int],
     temperature: float,
     max_retries: int,
     timeout: float,
+    enable_thinking: bool = False,
     system_prompt: Optional[str] = None,
 ) -> tuple[str, float]:
     """
@@ -44,10 +45,11 @@ async def call_vlm(
         endpoint: VLM 服务端点 URL（必须提供）。
         model: 模型名称（必须提供）。
         api_key: API 密钥（必须提供）。
-        max_tokens: 最大生成 token 数。
+        max_tokens: 最大生成 token 数，None 表示不限制。
         temperature: 温度参数。
         max_retries: 最大重试次数。
         timeout: 请求超时秒数。
+        enable_thinking: 是否启用思考模式，默认 False。启用后模型会进行深度推理。
         system_prompt: 系统提示词，默认为单据解析专家提示。
 
     Returns:
@@ -63,7 +65,7 @@ async def call_vlm(
         system_prompt = "你是一个单据解析专家。每次只提取一个字段，只输出字段值，不要输出任何额外文字。如果字段不存在，输出空字符串。"
 
     # 构建请求体
-    request_body = {
+    request_body: dict = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -76,13 +78,21 @@ async def call_vlm(
             },
         ],
         "temperature": temperature,
-        "max_tokens": max_tokens,
     }
+
+    # 只有指定了 max_tokens 且大于 0 时才添加
+    if max_tokens is not None and max_tokens > 0:
+        request_body["max_tokens"] = max_tokens
 
     # 构建请求头
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+
+    # 启用思考模式时添加特定请求头（DashScope）
+    if enable_thinking:
+        headers["X-DashScope-Enable-Thinking"] = "true"
+        logger.debug("思考模式已启用")
 
     # 重试配置
     retry_count = 0
@@ -115,6 +125,13 @@ async def call_vlm(
                 data = response.json()
                 response_text = data["choices"][0]["message"]["content"]
                 response_text = response_text.strip() if response_text else ""
+
+                # 如果启用思考模式，可能需要从 reasoning_content 中提取思考过程
+                # 这里只记录日志，不影响返回结果
+                if enable_thinking:
+                    reasoning_content = data["choices"][0]["message"].get("reasoning_content")
+                    if reasoning_content:
+                        logger.debug(f"思考过程: {reasoning_content[:200]}...")
 
                 # 提取置信度
                 confidence = _extract_confidence(data, response_text)
