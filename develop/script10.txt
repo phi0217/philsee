@@ -1,0 +1,65 @@
+脚本 9：trace_manager.py 开发提示词
+功能描述
+实现请求追踪管理器：生成唯一的 trace_id（UUID），并提供内存字典存储每个请求的中间状态。该管理器用于在单次请求的生命周期中，辅助传递和记录状态信息（如预处理进度、当前页码、错误标记等），便于调试和日志关联。由于第一阶段不涉及分布式缓存，直接使用内存字典即可。
+
+输入参数
+无（初始化时创建空字典）
+
+输出
+new_trace(): 返回新生成的 trace_id（字符串）
+
+update_state(trace_id, state_dict): 无返回值，更新指定 trace_id 的状态
+
+get_state(trace_id): 返回该 trace_id 的状态字典（若不存在返回空字典）
+
+依赖库
+uuid（标准库）
+
+typing
+
+代码要求
+Python 3.11，使用类型注解。
+
+类定义：
+
+python
+class TraceManager:
+    def __init__(self): ...
+    def new_trace(self) -> str: ...
+    def update_state(self, trace_id: str, state: dict[str, any]) -> None: ...
+    def get_state(self, trace_id: str) -> dict[str, any]: ...
+实现细节：
+
+__init__ 初始化 self._store: dict[str, dict] = {}。
+new_trace 使用 uuid.uuid4().hex 生成 32 位十六进制字符串（或 str(uuid.uuid4())），并初始化状态字典（如 {"status": "pending", "created_at": timestamp}），存入 _store，返回 trace_id。
+update_state 将传入的 state 字典合并到 _store[trace_id] 中（使用 dict.update）。
+get_state 返回 _store.get(trace_id, {}) 的副本（或原字典，但建议副本防止外部修改）。
+可选：提供 cleanup_old(seconds) 方法，清理超过指定时间的旧记录（第一阶段可暂不实现）。
+错误处理：当更新或获取不存在的 trace_id 时，update_state 应创建新条目（或静默失败？推荐创建），get_state 返回空字典。
+
+日志：无需记录（或仅 DEBUG 级别）。
+
+提供测试入口：演示生成 trace_id，更新状态，获取状态。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    tm = TraceManager()
+    tid = tm.new_trace()
+    print(f"New trace: {tid}")
+    tm.update_state(tid, {"page": 1, "status": "processing"})
+    tm.update_state(tid, {"page": 2})
+    state = tm.get_state(tid)
+    print(state)  # 应包含 page=2, status='processing', created_at...
+    # 获取不存在的 trace_id
+    print(tm.get_state("non-existing"))  # {}
+注意事项
+trace_id 应具有足够的唯一性，uuid.uuid4().hex 是合适的。
+
+状态字典可以存储任意 JSON 可序列化的数据，但不要存储大对象（如图片 bytes），只存储元数据。
+
+由于是内存存储，服务重启后数据丢失，适用于单次请求生命周期内临时存储。
+
+如果需要持久化或分布式共享，后续可替换为 Redis，但第一阶段保持简单。
+
+请根据以上要求生成 trace_manager.py 的完整代码。
