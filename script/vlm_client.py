@@ -25,8 +25,8 @@ async def call_vlm(
     image_base64: str,
     user_prompt: str,
     system_prompt: Optional[str] = None,
-    endpoint: str = "http://localhost:8000/v1/chat/completions",
-    model: str = "qwen-vl-max",
+    endpoint: str = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    model: str = "qwen3-vl-plus",
     api_key: str = "",
     max_tokens: int = 1024,
     temperature: float = 0.0,
@@ -227,11 +227,11 @@ if __name__ == "__main__":
         )
         parser.add_argument(
             "--endpoint",
-            default="http://localhost:8000/v1/chat/completions",
+            default="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             help="VLM 服务端点",
         )
-        parser.add_argument("--model", default="qwen-vl-max", help="模型名称")
-        parser.add_argument("--api-key", default="", help="API 密钥")
+        parser.add_argument("--model", default="qwen3-vl-plus", help="模型名称")
+        parser.add_argument("--api-key", default="sk-eb0a0c50ab534cf0bd991859558edbf2", help="API 密钥")
         parser.add_argument("--timeout", type=float, default=30.0, help="超时秒数")
         parser.add_argument("--max-retries", type=int, default=2, help="最大重试次数")
         args = parser.parse_args()

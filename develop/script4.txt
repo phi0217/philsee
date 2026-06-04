@@ -1,0 +1,123 @@
+脚本 4：vlm_client.py 开发提示词
+功能描述
+实现异步调用外部 VLM（视觉大模型）接口，兼容 OpenAI 多模态聊天补全格式。支持自动重试（指数退避）、超时控制、置信度提取等功能。该脚本是所有字段提取操作的基础 HTTP 客户端。
+
+输入参数
+image_base64: 图片的 base64 字符串（已包含 data:image/jpeg;base64, 前缀）
+
+user_prompt: 用户提示词，描述需要提取的字段及要求
+
+system_prompt: 可选，系统提示词（默认为 "你是一个单据解析专家。每次只提取一个字段，只输出字段值，不要输出任何额外文字。如果字段不存在，输出空字符串。"）
+
+endpoint: VLM 服务端点 URL（如 http://your-gateway/v1/chat/completions）
+
+model: 模型名称（如 "qwen-vl-max"）
+
+api_key: API 密钥（可选，空字符串表示无需认证）
+
+max_tokens: 最大生成 token 数（默认 1024）
+
+temperature: 温度参数（默认 0.0）
+
+max_retries: 最大重试次数（默认 2）
+
+timeout: 请求超时秒数（默认 30）
+
+输出
+返回一个元组 (response_text: str, confidence: float)：
+
+response_text: VLM 返回的原始文本（已去除首尾空白）
+
+confidence: 置信度（浮点数，范围 0~1）。优先从响应中解析 confidence 字段；若无，则根据文本是否为空简单赋值：非空为 0.9，空为 0.1。
+
+依赖库
+httpx (支持异步 HTTP 请求)
+
+asyncio
+
+json
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数签名：
+
+python
+async def call_vlm(
+    image_base64: str,
+    user_prompt: str,
+    system_prompt: Optional[str] = None,
+    endpoint: str = "http://localhost:8000/v1/chat/completions",
+    model: str = "qwen-vl-max",
+    api_key: str = "",
+    max_tokens: int = 1024,
+    temperature: float = 0.0,
+    max_retries: int = 2,
+    timeout: float = 30.0
+) -> tuple[str, float]
+实现细节：
+
+构建请求体（JSON 格式），符合 OpenAI 多模态规范：
+json
+{
+  "model": model,
+  "messages": [
+    {"role": "system", "content": system_prompt},
+    {"role": "user", "content": [
+      {"type": "image_url", "image_url": {"url": image_base64}},
+      {"type": "text", "text": user_prompt}
+    ]}
+  ],
+  "temperature": temperature,
+  "max_tokens": max_tokens
+}
+使用 httpx.AsyncClient 发送 POST 请求，设置 timeout 和 Authorization 头（如果 api_key 非空）。
+重试机制：
+遇到 httpx.HTTPStatusError、httpx.TimeoutException、httpx.RequestError 时重试。
+采用指数退避策略（例如 0.5s, 1s, 2s）。
+重试次数用完仍失败，则抛出 RuntimeError（或自定义异常）。
+解析响应：
+提取 data["choices"][0]["message"]["content"] 作为响应文本。
+可选：尝试从响应中提取 confidence 字段（若服务端返回了额外信息），否则按规则计算。
+置信度计算：
+尝试解析响应文本为 JSON，检查是否有 confidence 键；若有则使用该值（限制在 0~1 之间）。
+否则，若响应文本长度 > 0 且不是空字符串，则置信度为 0.9；空字符串则为 0.1。
+错误处理：捕获异常并记录日志，重试前打印警告。
+
+日志：使用 logging.getLogger(__name__)，记录每次请求的模型、端点、耗时、重试次数等信息。
+
+提供测试入口：使用一个模拟的 VLM 服务（或真实端点），测试正常调用、重试、置信度解析等场景。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import asyncio
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    async def test():
+        # 假设有一个真实的图片 base64，这里用占位符
+        b64 = "data:image/jpeg;base64,..."
+        response, conf = await call_vlm(
+            image_base64=b64,
+            user_prompt="提取信用证号码",
+            endpoint="http://localhost:8000/v1/chat/completions",
+            model="qwen-vl-max",
+            api_key="your-key"
+        )
+        print(f"Response: {response}")
+        print(f"Confidence: {conf}")
+    
+    asyncio.run(test())
+注意事项
+图片的 base64 必须已经包含 data:image/jpeg;base64, 前缀（由 image_preprocess.py 提供）。
+
+超时和重试次数可根据实际 VLM 服务性能调整。
+
+如果 VLM 服务要求其他认证方式（如 Bearer Token），在 Authorization 头中携带 Bearer {api_key}。
+
+为避免日志过多，可对成功的请求记录调试级别日志。
+
+该模块应是无状态的，所有依赖通过参数传入。
+
+请根据以上要求生成 vlm_client.py 的完整代码。
