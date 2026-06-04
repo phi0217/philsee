@@ -1,0 +1,103 @@
+脚本 7：aggregator.py 开发提示词
+功能描述
+实现跨页字段聚合逻辑。接收所有页的字段提取结果列表（每个页面包含多个字段的结果），根据配置的聚合规则（agg_rules），对每个字段进行合并处理，生成最终的文档级字段值。同时记录聚合决策（选中的页面、原因、所有候选值）。支持四种聚合策略：
+
+first_non_null: 按页码顺序取第一个非空值
+
+last_non_null: 按页码顺序取最后一个非空值
+
+max_confidence: 取置信度最高的值（置信度相同则取页码较小的）
+
+merge_lists: 对于列表类型字段，按页码顺序合并所有页的列表（每个页的值应为列表）
+
+输入参数
+all_page_results: 列表，每个元素是 process_page 返回的该页结果列表。结构：
+
+python
+[
+    [{"field_name": "amount", "value": 100, "confidence": 0.9, "page": 1, ...}, ...],
+    [{"field_name": "amount", "value": 200, "confidence": 0.8, "page": 2, ...}, ...],
+]
+注意：每个结果字典中必须包含 field_name, value, confidence, page（页码）字段；其他字段（如 raw_response）可选。
+
+agg_rules: 聚合规则字典，格式如下：
+
+python
+{
+    "field_name": {"strategy": "first_non_null"},   # 字段级规则
+    "default": {"strategy": "first_non_null"}       # 默认规则
+}
+支持 first_non_null, last_non_null, max_confidence, merge_lists。
+
+输出
+返回一个元组 (aggregated_fields: dict, agg_decisions: dict)：
+
+aggregated_fields: 字典，{field_name: final_value}
+
+agg_decisions: 字典，{field_name: {"selected_page": int or None, "reason": str, "candidates": list}}
+candidates 列表包含所有页的候选值及置信度，格式：[{"page": 1, "value": ..., "confidence": 0.9}, ...]
+对于 merge_lists 策略，selected_page 为 None，reason 为 "merge_lists"，candidates 存储所有页的列表（值本身）。
+
+依赖库
+无外部依赖（仅使用 Python 标准库）
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数签名：
+
+python
+def aggregate_results(
+    all_page_results: list[list[dict[str, Any]]],
+    agg_rules: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]
+实现步骤：
+
+将 all_page_results 按字段名重新组织为 {field_name: [{'page': p, 'value': v, 'confidence': c}, ...]}。
+对于每个字段，获取其聚合策略（如果 agg_rules 中没有该字段规则，则使用 default 规则，若 default 也不存在则默认 first_non_null）。
+根据策略计算最终值：
+first_non_null: 按页码升序遍历候选列表，返回第一个 value is not None 的项；若全为空，则最终值为 None，selected_page 为 None，reason 为 "first_non_null_all_none"。
+last_non_null: 按页码升序遍历，取最后一个非空值。
+max_confidence: 取置信度最高的项（若置信度相同取页码较小者）。如果所有置信度都为 0 且值为空，则返回 None。
+merge_lists: 要求所有候选值都是列表；按页码顺序将所有列表拼接成一个新列表。最终值为合并后的列表。selected_page 设为 None，reason 为 "merge_lists"。如果某个页的值不是列表，则跳过并记录警告。
+记录聚合决策：选中的页面（selected_page）、原因（reason）、所有候选值（candidates）。
+返回 aggregated_fields 和 agg_decisions。
+错误处理：当 merge_lists 遇到非列表值时，跳过该页并在日志中警告，不中断流程。
+
+日志：使用 logging.getLogger(__name__)，记录使用了哪个策略、合并了多少项等。
+
+提供测试入口：构造多个页面的模拟数据，验证每种聚合策略的正确性。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # 模拟两页结果
+    page1 = [
+        {"field_name": "amount", "value": 100, "confidence": 0.9, "page": 1},
+        {"field_name": "commodities", "value": [{"id": 1}], "confidence": 0.8, "page": 1}
+    ]
+    page2 = [
+        {"field_name": "amount", "value": 200, "confidence": 0.95, "page": 2},
+        {"field_name": "commodities", "value": [{"id": 2}], "confidence": 0.9, "page": 2}
+    ]
+    rules = {
+        "amount": {"strategy": "max_confidence"},
+        "commodities": {"strategy": "merge_lists"},
+        "default": {"strategy": "first_non_null"}
+    }
+    fields, decisions = aggregate_results([page1, page2], rules)
+    print("Aggregated fields:", fields)
+    print("Decisions:", decisions)
+注意事项
+输入的 all_page_results 中每个字段结果应包含 page 键（页码），否则无法正确排序。如果缺失，则按列表原有顺序处理，但应记录警告。
+
+对于 merge_lists，合并后的列表元素顺序为先第一页列表项，后第二页列表项，以此类推。
+
+置信度比较时，若两个候选值置信度相同，选择页码较小的（更靠前）。
+
+聚合模块应保持纯函数，无副作用。
+
+请根据以上要求生成 aggregator.py 的完整代码。
