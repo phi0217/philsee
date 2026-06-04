@@ -1,0 +1,36 @@
+# Philsee 依赖列表
+# pip install -r requirements.txt
+
+# Web 框架
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# 环境变量
+python-dotenv>=1.0.0
+
+# 异步 HTTP 客户端
+httpx>=0.26.0
+
+# 图像处理
+opencv-python>=4.9.0
+numpy>=1.26.0
+
+# MinIO 对象存储
+minio>=7.2.0
+
+# 数据库
+sqlalchemy[asyncio]>=2.0.0
+aiomysql>=0.2.0
+pymysql>=1.1.0
+
+# 数据验证
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# 异步支持
+asyncio>=3.4.3
+
+# 可选：测试依赖
+# pytest>=7.4.0
+# pytest-asyncio>=0.23.0
+# httpx>=0.26.0  # 用于测试 FastAPI
