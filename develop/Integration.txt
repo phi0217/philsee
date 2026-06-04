@@ -1,0 +1,144 @@
+你已经生成了以下10个独立的脚本，存放在本地的 /Users/mac/Documents/workspace/philsee/script 目录下。现在需要将它们整合成一个可运行的 FastAPI 项目，并补充缺失的配置、依赖、数据库初始化等文件。注意：不提供整合 MySQL + MinIO 的 docker-compose.yml，用户自行管理这些服务。
+开发过程中不要对/Users/mac/Documents/workspace/philsee/script文件夹下的脚本进行修改，
+vlm 请求不要在代码中给定默认值
+
+已有脚本列表
+image_preprocess.py – 图像缩放、base64编码
+
+minio_upload.py – 异步上传图片到 MinIO
+
+config_loader.py – 从 MySQL 加载配置（版本化）
+
+vlm_client.py – 调用 VLM HTTP 接口（重试、置信度）
+
+field_extractor.py – 单个字段提取（支持 JSON 解析）
+
+page_processor.py – 单页串行字段提取
+
+aggregator.py – 跨页聚合（四种策略）
+
+db_writer.py – 异步写入 MySQL
+
+trace_manager.py – 内存追踪管理
+
+main_api.py – FastAPI 入口（目前可能只有框架）
+
+整合目标
+生成一个完整的、可直接运行的 philsee 项目，包含：
+
+正确的包结构（online/ 目录作为 Python 包）
+
+requirements.txt（所有依赖）
+
+.env.example（配置模板，用户需自行填写 MySQL、MinIO、VLM 连接信息）
+
+数据库初始化脚本（存放在 sql/ 目录，文件名 init_db.sql）
+
+修复脚本之间的导入错误（例如 from online.vlm_client import call_vlm）
+
+确保所有异步函数正确调用，避免阻塞
+
+添加根目录的 README.md 简要说明
+
+不要求生成 docker-compose.yml（或者生成一个空的/注释掉的模板，告知用户自行启动 MySQL 和 MinIO）。
+
+具体要求
+1. 目录结构（最终输出应创建这些文件）
+text
+philsee/
+├── online/
+│   ├── __init__.py
+│   ├── image_preprocess.py
+│   ├── minio_upload.py
+│   ├── config_loader.py
+│   ├── vlm_client.py
+│   ├── field_extractor.py
+│   ├── page_processor.py
+│   ├── aggregator.py
+│   ├── db_writer.py
+│   ├── trace_manager.py
+│   └── main_api.py
+├── sql/
+│   └── init_db.sql
+├── .env.example
+├── requirements.txt
+└── README.md
+2. 代码修复与增强
+导入修复：将所有脚本中的相对导入改为正确的包内导入（例如 from online.vlm_client import call_vlm）。为了避免循环依赖，建议在 main_api.py 中导入其他模块，而其他模块之间通过参数传递依赖。
+
+统一配置加载：在 main_api.py 中读取环境变量（使用 os.getenv 或 pydantic-settings），然后将配置传递给各个函数（避免各模块直接硬编码）。不要在每个脚本内部重新读取环境变量。
+
+数据库引擎管理：在 main_api.py 启动时创建异步引擎和会话工厂，并传递给 config_loader 和 db_writer（或让它们接受 db_url 字符串）。注意：config_loader 内部会独立创建引擎，需要修改为接受已创建的引擎或 db_url 参数。
+
+MinIO 客户端：在 main_api.py 中创建 MinIO 客户端（同步包装为异步），传递给 upload_to_minio。
+
+VLM 配置：将 VLM 端点、模型、密钥等放入配置对象，传入 process_page → extract_field → call_vlm。
+
+错误处理：增加全局异常处理器，确保无论哪个环节失败，都能返回可读的 JSON 错误。
+
+日志：配置统一的 logging 格式（包含时间、级别、trace_id）。
+
+3. 配置文件示例
+.env.example 内容：
+
+text
+# VLM
+VLM_ENDPOINT=http://your-gateway/v1/chat/completions
+VLM_MODEL=qwen-vl-max
+VLM_API_KEY=your-key
+VLM_MAX_TOKENS=1024
+VLM_TEMPERATURE=0.0
+VLM_TIMEOUT=30
+VLM_MAX_RETRIES=2
+
+# MinIO
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=admin
+MINIO_SECRET_KEY=admin123456
+MINIO_BUCKET=philsee-images
+MINIO_SECURE=false
+
+# MySQL
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=password
+MYSQL_DATABASE=philsee
+
+# Image
+IMAGE_TARGET_SHORT_EDGE=1024
+4. 数据库初始化 SQL（sql/init_db.sql）
+包含以下表的创建语句：
+
+config_versions
+
+requests
+
+field_extractions
+
+agg_decisions
+
+5. 运行方式
+bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 复制环境变量
+cp .env.example .env
+# 编辑 .env 填写真实的连接信息
+
+# 初始化数据库（需先启动 MySQL）
+mysql -u root -p < sql/init_db.sql
+
+# 启动服务
+uvicorn online.main_api:app --reload --port 8000
+期望输出
+请生成上述所有文件的内容（每个文件完整代码），并按照目录结构组织好。确保代码没有语法错误，且各模块之间能正确协作。如果发现原脚本中有功能缺失或逻辑不一致，请进行必要的最小修复（例如 page_processor 中调用 extract_field 需要传入 vlm_config，而原来的函数签名可能不匹配，请统一）。
+
+特别提醒：
+
+由于不提供 docker-compose.yml，请在 README.md 中明确说明用户需要自行运行 MySQL 和 MinIO，并提供简单的启动命令示例（如 docker run）。
+
+如果任何脚本依赖于缺失的第三方库，请在 requirements.txt 中包含。
+
+请开始生成整合后的完整项目代码。
