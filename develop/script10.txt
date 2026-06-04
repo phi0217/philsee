@@ -1,65 +1,163 @@
-脚本 9：trace_manager.py 开发提示词
+脚本 10：main_api.py 开发提示词
 功能描述
-实现请求追踪管理器：生成唯一的 trace_id（UUID），并提供内存字典存储每个请求的中间状态。该管理器用于在单次请求的生命周期中，辅助传递和记录状态信息（如预处理进度、当前页码、错误标记等），便于调试和日志关联。由于第一阶段不涉及分布式缓存，直接使用内存字典即可。
+实现 FastAPI 应用入口，整合前9个脚本的所有模块，提供 /parse 端点用于处理单据解析请求。该端点接收 doc_type 和多个图片文件，按顺序执行以下操作：
 
-输入参数
-无（初始化时创建空字典）
+生成 trace_id
 
-输出
-new_trace(): 返回新生成的 trace_id（字符串）
+预处理每张图片（缩放、编码 base64、上传 MinIO）
 
-update_state(trace_id, state_dict): 无返回值，更新指定 trace_id 的状态
+从 MySQL 加载配置（fields_schema, profile, agg_rules）
 
-get_state(trace_id): 返回该 trace_id 的状态字典（若不存在返回空字典）
+逐页串行调用字段提取（利用 process_page）
+
+跨页聚合结果（利用 aggregate_results）
+
+将最终结果写入数据库（利用 save_results）
+
+返回 JSON 响应
+
+要求使用异步处理，错误处理完善，日志记录详细，并支持通过环境变量或配置文件加载连接参数（数据库、MinIO、VLM）。
+
+输入（HTTP 请求）
+doc_type: 表单字段，字符串，单据类型（如 "letter_of_credit"）
+
+images: 表单字段，一个或多个图片文件（支持 PNG/JPEG 等）
+
+输出（HTTP 响应）
+成功时返回 {"trace_id": str, "fields": dict, "warnings": list}，状态码 200
+
+失败时返回 {"trace_id": str, "error": str}，状态码 500（或其他 4xx/5xx）
 
 依赖库
-uuid（标准库）
+fastapi
 
-typing
+uvicorn（用于运行）
+
+python-multipart（处理文件上传）
+
+前9个脚本中的所有模块
+
+asyncio
+
+logging
+
+os / dotenv（可选，用于环境变量）
 
 代码要求
 Python 3.11，使用类型注解。
 
-类定义：
+FastAPI 应用实例：
 
 python
-class TraceManager:
-    def __init__(self): ...
-    def new_trace(self) -> str: ...
-    def update_state(self, trace_id: str, state: dict[str, any]) -> None: ...
-    def get_state(self, trace_id: str) -> dict[str, any]: ...
-实现细节：
+app = FastAPI(title="philsee Document Parser", version="1.0.0")
+配置加载：从环境变量或 .env 文件中读取以下配置：
 
-__init__ 初始化 self._store: dict[str, dict] = {}。
-new_trace 使用 uuid.uuid4().hex 生成 32 位十六进制字符串（或 str(uuid.uuid4())），并初始化状态字典（如 {"status": "pending", "created_at": timestamp}），存入 _store，返回 trace_id。
-update_state 将传入的 state 字典合并到 _store[trace_id] 中（使用 dict.update）。
-get_state 返回 _store.get(trace_id, {}) 的副本（或原字典，但建议副本防止外部修改）。
-可选：提供 cleanup_old(seconds) 方法，清理超过指定时间的旧记录（第一阶段可暂不实现）。
-错误处理：当更新或获取不存在的 trace_id 时，update_state 应创建新条目（或静默失败？推荐创建），get_state 返回空字典。
+VLM_ENDPOINT, VLM_MODEL, VLM_API_KEY, VLM_MAX_TOKENS, VLM_TEMPERATURE, VLM_TIMEOUT, VLM_MAX_RETRIES
 
-日志：无需记录（或仅 DEBUG 级别）。
+MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET, MINIO_SECURE
 
-提供测试入口：演示生成 trace_id，更新状态，获取状态。
+MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 
+IMAGE_TARGET_SHORT_EDGE（默认 1024）
+
+在应用启动时创建全局资源（如数据库引擎、MinIO 客户端等），并在关闭时释放。
+
+端点实现：
+
+python
+@app.post("/parse")
+async def parse_document(
+    doc_type: str = Form(...),
+    images: list[UploadFile] = File(...)
+) -> dict:
+错误处理：使用 try...except 捕获各模块可能抛出的异常，记录日志后返回友好错误信息。
+
+日志：使用 logging 配置，记录每个请求的 trace_id、处理步骤耗时、异常信息。
+
+性能注意事项：
+
+图片预处理和上传可以并行（使用 asyncio.gather），但页面提取必须串行。
+
+数据库写入可使用 asyncio.to_thread 或直接异步方式（save_results 已是异步）。
+
+提供 if __name__ == "__main__" 入口，方便直接运行 uvicorn。
+
+端点内部流程伪代码
+python
+async def parse_document(doc_type, images):
+    trace_id = trace_manager.new_trace()
+    try:
+        # 1. 预处理所有图片
+        tasks = []
+        for img_file in images:
+            raw = await img_file.read()
+            tasks.append(preprocess_image(raw, target_short_edge))
+        processed_images = await asyncio.gather(*tasks)  # 返回 bytes 列表
+        base64_list = [encode_to_base64(img) for img in processed_images]
+        
+        # 2. 上传到 MinIO（可选，不影响主流程）
+        minio_paths = []
+        for idx, img in enumerate(processed_images):
+            obj_name = f"{trace_id}/page_{idx+1}.jpg"
+            path = await upload_to_minio(img, bucket, obj_name, ...)
+            minio_paths.append(path)
+        
+        # 3. 加载配置
+        config = await load_config(db_url, doc_type)
+        fields_schema = config["fields_schema"]
+        profile = config["profile"]
+        agg_rules = config["agg_rules"]
+        
+        # 4. 逐页提取（串行）
+        all_page_results = []
+        total_pages = len(base64_list)
+        for page_num, b64 in enumerate(base64_list, start=1):
+            # 获取该页需要提取的字段（根据 profile 中的 pages 属性）
+            fields_for_page = []
+            for field_name, field_cfg in profile["fields"].items():
+                pages_cfg = field_cfg.get("pages", [])
+                if pages_cfg == "all" or page_num in pages_cfg or (pages_cfg == "last" and page_num == total_pages) or (pages_cfg == "first" and page_num == 1):
+                    # 合并 fields_schema 中的类型信息
+                    full_cfg = {**field_cfg, "field_name": field_name, "type": fields_schema.get(field_name, {}).get("type", "string")}
+                    fields_for_page.append(full_cfg)
+            if not fields_for_page:
+                continue
+            page_res = await process_page(b64, fields_for_page, page_num, vlm_config)
+            # 添加 minio_path 和 page 信息
+            for res in page_res:
+                res["page"] = page_num
+                res["minio_path"] = minio_paths[page_num-1]
+            all_page_results.append(page_res)
+        
+        # 5. 聚合
+        final_fields, agg_decisions = aggregate_results(all_page_results, agg_rules)
+        
+        # 6. 存储
+        async with db_session() as session:
+            await save_results(session, trace_id, doc_type, total_pages, final_fields, [], all_page_results, agg_decisions)
+        
+        return {"trace_id": trace_id, "fields": final_fields, "warnings": []}
+    except Exception as e:
+        logging.exception(f"Request {trace_id} failed")
+        return {"trace_id": trace_id, "error": str(e)}
 测试入口示例
 python
 if __name__ == "__main__":
-    tm = TraceManager()
-    tid = tm.new_trace()
-    print(f"New trace: {tid}")
-    tm.update_state(tid, {"page": 1, "status": "processing"})
-    tm.update_state(tid, {"page": 2})
-    state = tm.get_state(tid)
-    print(state)  # 应包含 page=2, status='processing', created_at...
-    # 获取不存在的 trace_id
-    print(tm.get_state("non-existing"))  # {}
+    import uvicorn
+    uvicorn.run("main_api:app", host="0.0.0.0", port=8000, reload=True)
 注意事项
-trace_id 应具有足够的唯一性，uuid.uuid4().hex 是合适的。
+需要保证所有前9个脚本已实现并正确导入（可使用相对导入或设置 PYTHONPATH）。
 
-状态字典可以存储任意 JSON 可序列化的数据，但不要存储大对象（如图片 bytes），只存储元数据。
+数据库连接 URL 构建：mysql+aiomysql://{user}:{pass}@{host}:{port}/{database}。
 
-由于是内存存储，服务重启后数据丢失，适用于单次请求生命周期内临时存储。
+MinIO 桶需事先创建或在 upload_to_minio 中自动创建（已实现）。
 
-如果需要持久化或分布式共享，后续可替换为 Redis，但第一阶段保持简单。
+对于 pages 属性的解析逻辑（"all", "first", "last", 列表）应放在 main_api 中，保持 process_page 简单。
 
-请根据以上要求生成 trace_manager.py 的完整代码。
+由于 process_page 中已经包含了字段提取，不需要在此重复调用 extract_field。
+
+如果某些字段在 fields_schema 中没有类型定义，默认视为 string。
+
+返回的 warnings 第一阶段可留空（或添加一些非致命错误，如字段缺失）。
+
+请根据以上要求生成 main_api.py 的完整代码。确保导入正确，配置读取清晰，并能够直接运行。
