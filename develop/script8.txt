@@ -1,0 +1,153 @@
+脚本 8：db_writer.py 开发提示词
+功能描述
+实现将处理结果写入 MySQL 数据库的功能。写入三个表：requests（请求主记录）、field_extractions（每页每个字段的提取详情）、agg_decisions（聚合决策）。使用异步 SQLAlchemy 引擎，确保不阻塞事件循环。支持批量插入 field_extractions 以提高效率。
+
+输入参数
+session: SQLAlchemy 异步会话（AsyncSession 实例）
+
+trace_id: 请求唯一标识（字符串）
+
+doc_type: 单据类型（字符串）
+
+total_pages: 总页数（整数）
+
+final_fields: 最终聚合后的字段字典（dict[str, Any]）
+
+warnings: 警告列表（list[dict[str, Any]]，每个元素包含 field、message 等）
+
+page_results: 所有页的提取结果，结构为 list[list[dict]]，与 aggregator.py 中的输入格式一致，每个元素必须包含 field_name, value, confidence, raw_response, page, minio_path（可选，但建议包含）
+
+agg_decisions: 聚合决策字典（由 aggregator.py 返回），结构为 {field_name: {"selected_page": int or None, "reason": str, "candidates": list}}
+
+输出
+无返回值（None）。执行失败时抛出异常。
+
+依赖库
+sqlalchemy[asyncio] (2.0+)
+
+aiomysql
+
+json (用于将 Python 对象转为 JSON 字符串)
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数签名：
+
+python
+async def save_results(
+    session: AsyncSession,
+    trace_id: str,
+    doc_type: str,
+    total_pages: int,
+    final_fields: dict[str, Any],
+    warnings: list[dict[str, Any]],
+    page_results: list[list[dict[str, Any]]],
+    agg_decisions: dict[str, Any]
+) -> None
+实现步骤：
+
+插入 requests 记录：
+将 final_fields 转换为 JSON 字符串（使用 json.dumps，确保中文可读）。
+将 warnings 转换为 JSON 字符串。
+执行 insert() 语句。
+批量插入 field_extractions：
+遍历 page_results，每个页面是一个列表，每个元素包含字段结果。
+为每个字段构建记录字典：trace_id, page_num, field_name, extracted_value（若值为 None 则存 NULL，否则转为字符串），confidence, raw_response（文本），minio_path（如果存在）。
+使用 session.execute(insert(...), values_list) 批量插入。
+插入 agg_decisions：
+遍历 agg_decisions 的每个字段。
+将 candidates 转换为 JSON 字符串。
+执行 insert() 语句。
+提交事务（调用 await session.commit()）。若任何步骤失败，回滚并抛出异常。
+错误处理：捕获 SQLAlchemy 异常，记录日志，然后重新抛出（或包装为自定义异常）。
+
+日志：使用 logging.getLogger(__name__)，记录插入的数据量（requests 1条，field_extractions 条数，agg_decisions 条数）。
+
+提供测试入口：使用内存 SQLite 或测试数据库，验证插入逻辑。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import asyncio
+    import logging
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    logging.basicConfig(level=logging.INFO)
+    
+    async def test():
+        # 使用内存 SQLite（或连接测试 MySQL）
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async_session = async_sessionmaker(engine, expire_on_commit=False)
+        # 需要先创建表结构（此处省略）
+        
+        async with async_session() as session:
+            await save_results(
+                session=session,
+                trace_id="test-123",
+                doc_type="letter_of_credit",
+                total_pages=2,
+                final_fields={"amount": 1500, "currency": "USD"},
+                warnings=[],
+                page_results=[
+                    [
+                        {"field_name": "amount", "value": 1500, "confidence": 0.9,
+                         "raw_response": "1500", "page": 1, "minio_path": "test/page1.jpg"}
+                    ],
+                    [
+                        {"field_name": "amount", "value": 1500, "confidence": 0.9,
+                         "raw_response": "1500", "page": 2, "minio_path": "test/page2.jpg"}
+                    ]
+                ],
+                agg_decisions={
+                    "amount": {"selected_page": 1, "reason": "first_non_null",
+                               "candidates": [{"page": 1, "value": 1500, "confidence": 0.9}]}
+                }
+            )
+            print("Save succeeded")
+    
+    asyncio.run(test())
+数据库表结构（已定义，供参考）
+sql
+CREATE TABLE requests (
+    trace_id VARCHAR(64) PRIMARY KEY,
+    doc_type VARCHAR(32) NOT NULL,
+    total_pages INT,
+    final_fields JSON,
+    warnings JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE field_extractions (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    trace_id VARCHAR(64) NOT NULL,
+    page_num INT NOT NULL,
+    field_name VARCHAR(64) NOT NULL,
+    extracted_value TEXT,
+    confidence FLOAT,
+    raw_response TEXT,
+    minio_path VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX(trace_id, page_num)
+);
+
+CREATE TABLE agg_decisions (
+    trace_id VARCHAR(64) NOT NULL,
+    field_name VARCHAR(64) NOT NULL,
+    selected_page INT,
+    selected_value TEXT,
+    reason VARCHAR(255),
+    candidates JSON,
+    PRIMARY KEY(trace_id, field_name)
+);
+注意事项
+对于 extracted_value，如果值是 None，应插入 NULL，而不是字符串 "None"。如果值是非字符串类型（如数字、列表、字典），应转换为字符串或 JSON 字符串。简单起见，使用 str(value) 即可，但列表/字典建议用 json.dumps。
+
+field_extractions 表可能数据量较大，建议使用批量插入（sqlalchemy 的 insert().values() 配合列表）。
+
+如果 page_results 中的某个字段缺少 minio_path，则忽略该列。
+
+agg_decisions 中的 candidates 可能包含非 JSON 可序列化对象（如 Decimal），需要先转换为原生类型（float/int/str）。
+
+确保使用 await session.commit() 提交事务；若发生异常，在 except 块中调用 await session.rollback()。
+
+请根据以上要求生成 db_writer.py 的完整代码。
