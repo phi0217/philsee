@@ -1,0 +1,115 @@
+脚本 6：page_processor.py 开发提示词
+功能描述
+实现单页文档的处理逻辑：根据当前页码和单据类型的字段配置（profile），确定该页需要提取的字段列表，然后串行调用 field_extractor 提取每个字段的值。最终返回该页所有字段的提取结果列表，每个结果包含字段名、提取值、置信度和原始响应。
+
+输入参数
+image_base64: 当前页图片的 base64 字符串（已包含 data:image/jpeg;base64, 前缀）
+
+fields_config: 字段配置列表，每个元素是一个字典，至少包含：
+
+field_name (str)
+
+type (str)
+
+prompt_hint (str)
+
+可选 pages (list[int] 或 "last"/"first") – 但调用方应已过滤，此处无需再判断
+
+page_num: 当前页码（整数，从1开始），主要用于日志记录
+
+vlm_config: VLM 客户端配置字典，直接传递给 extract_field
+
+system_prompt: 可选，覆盖默认系统提示词（传递给 extract_field）
+
+输出
+返回一个列表，每个元素是一个字典，结构为：
+
+python
+[
+    {
+        "field_name": str,
+        "value": Any,
+        "confidence": float,
+        "raw_response": str
+    },
+    ...
+]
+顺序与 fields_config 中的字段顺序一致。
+
+依赖库
+field_extractor (脚本5中的 extract_field 函数)
+
+asyncio
+
+代码要求
+Python 3.11，使用类型注解。
+
+函数签名：
+
+python
+async def process_page(
+    image_base64: str,
+    fields_config: list[dict[str, any]],
+    page_num: int,
+    vlm_config: dict[str, any],
+    system_prompt: Optional[str] = None
+) -> list[dict[str, any]]
+实现细节：
+
+初始化空列表 page_results = []。
+遍历 fields_config 中的每个字段配置（保持原始顺序）。
+对每个字段，调用 extract_field（传入 image_base64, 当前字段配置, vlm_config, system_prompt）。
+将返回的 (value, confidence, raw_response) 与 field_name 组装成字典，追加到 page_results。
+如果某个字段提取失败（抛出异常），应捕获异常并记录错误，然后在该字段的结果中设置 value=None, confidence=0.0, raw_response=str(exception)，并继续处理后续字段（不中断整页）。
+返回 page_results。
+日志：使用 logging.getLogger(__name__)，记录开始处理页码、每个字段的提取状态（成功/失败）、耗时等。
+
+提供测试入口：模拟 extract_field 的返回，测试串行调用顺序和异常处理。
+
+测试入口示例
+python
+if __name__ == "__main__":
+    import asyncio
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # 模拟 extract_field
+    async def mock_extract_field(img, cfg, vlm_cfg, sys_prompt):
+        # 模拟不同字段的不同响应
+        field_name = cfg["field_name"]
+        if field_name == "amount":
+            return ("1000.00", 0.9, "1000.00")
+        elif field_name == "currency":
+            return ("USD", 0.95, "USD")
+        else:
+            return (None, 0.0, "error")
+    
+    # 临时替换导入（实际测试时可使用 unittest.mock）
+    import sys
+    sys.modules['field_extractor'] = type('Mock', (), {'extract_field': mock_extract_field})()
+    
+    async def test():
+        fields = [
+            {"field_name": "amount", "type": "number", "prompt_hint": "金额"},
+            {"field_name": "currency", "type": "string", "prompt_hint": "币种"},
+            {"field_name": "invalid", "type": "string", "prompt_hint": "无效"}
+        ]
+        results = await process_page(
+            image_base64="data:image/jpeg;base64,...",
+            fields_config=fields,
+            page_num=1,
+            vlm_config={}
+        )
+        print(results)
+    
+    asyncio.run(test())
+注意事项
+该脚本不关心字段是否跨页，调用方（extract_pages_loop）应事先根据 pages 属性过滤好当前页需要提取的字段列表。
+
+串行调用是为了利用前缀缓存（同一页内图片相同），不要使用并行。
+
+异常处理要稳健，单个字段失败不应导致整页崩溃，但应记录错误便于调试。
+
+日志应包括页码和字段名，便于追踪问题。
+
+请根据以上要求生成 page_processor.py 的完整代码。
