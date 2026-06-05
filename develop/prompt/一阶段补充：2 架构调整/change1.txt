@@ -1,0 +1,89 @@
+提示词：为 config_versions 和 config_templates 表增加处理管道字段
+请根据以下需求，更新 config_versions 表的 content 字段规范（针对 config_type='profile'）以及 config_templates 表结构，增加前处理管道和后处理管道字段。这些管道使用管道符 | 连接多个处理步骤，按顺序执行。
+
+一、config_versions 表 profile 配置的 post_process 字段改造
+原有 profile 中的 post_process 字段（可选）改为后处理管道，格式为字符串，多个步骤用 | 分隔。例如："strip|to_number|round(2)"。系统应按照从左到右的顺序依次执行每个处理函数。
+
+支持的预定义后处理函数（第一阶段）：
+
+strip：去除字符串首尾空白
+
+lower：转小写
+
+upper：转大写
+
+to_number：尝试转换为数字（整数或浮点数），失败则保留原字符串
+
+to_string：强制转为字符串
+
+json_parse：尝试解析 JSON 字符串为 Python 对象
+
+round(N)：对数字四舍五入保留 N 位小数，例如 round(2)
+
+replace(old,new)：替换子串，例如 replace( ,_) 将空格替换为下划线（注意函数内不能有管道符）
+
+示例：
+
+json
+{
+  "doc_type": "invoice",
+  "fields": {
+    "amount": {
+      "pages": [1],
+      "prompt_hint": "提取总金额",
+      "post_process": "strip|to_number|round(2)"
+    },
+    "commodities": {
+      "pages": "all",
+      "prompt_hint": "提取货物清单 JSON",
+      "post_process": "strip|json_parse"
+    }
+  }
+}
+二、config_templates 表新增 pre_process 字段
+在 config_templates 表中增加一个 pre_process 字段，用于定义对整页图片或请求级别的前处理管道。该字段同样使用管道符 | 连接多个处理步骤，在字段提取之前执行（例如图片矫正、区域裁剪、格式转换等）。
+
+支持的预定义前处理函数（第一阶段）：
+
+fix_orientation：根据 EXIF 信息自动旋转图片
+
+deskew：倾斜矫正
+
+denoise：去噪
+
+scale(short_edge)：缩放图片短边到指定像素，例如 scale(1024)
+
+crop(x1,y1,x2,y2)：裁剪图片区域（坐标百分比或像素）
+
+to_grayscale：转为灰度图
+
+enhance_contrast：增强对比度
+
+表结构变更：
+
+sql
+ALTER TABLE config_templates ADD COLUMN pre_process VARCHAR(255) DEFAULT '' COMMENT '前处理管道，管道符分隔，如 "fix_orientation|deskew|scale(1024)"';
+使用方式：在在线服务处理请求时，根据 pre_process 字段对每页图片依次执行这些操作，然后再将处理后的图片送入字段提取流程。
+
+三、文档输出要求
+请生成一份更新后的配置规范文档，内容包括：
+
+config_versions 表中 profile 类型的 content 字段结构（增加 post_process 管道的详细说明）。
+
+config_templates 表新增 pre_process 字段的说明（用途、支持的处理函数列表、示例）。
+
+处理管道的通用规则：
+
+管道步骤按从左到右顺序执行。
+
+每个步骤是一个函数名，可带参数（参数写在括号内，多个参数用逗号分隔）。
+
+参数中不应包含管道符 |。
+
+如果某个步骤执行失败，应记录错误并跳过该步骤（或抛出异常，由调用方处理）。
+
+提供扩展自定义函数的机制说明（可选）。
+
+完整示例：包括一个 profile 配置（含 post_process）和一个 config_templates 记录（含 pre_process）。
+
+请使用 Markdown 格式输出，确保清晰易懂。

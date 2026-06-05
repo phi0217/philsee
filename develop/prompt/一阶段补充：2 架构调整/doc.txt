@@ -1,0 +1,104 @@
+提示词：为 config_versions 表的 content 字段编写规范文档
+请为 philsee 项目的 config_versions 表编写一份详细的规范文档，说明 content 字段在不同 config_type 下的 JSON 结构、字段含义、类型约束以及示例。该文档将作为配置编写人员的参考手册。
+手册生成在
+/Users/mac/Documents/workspace/philsee/develop/doc
+文件夹
+文档要求
+通用说明：
+
+每种 config_type 对应一种 JSON 结构。
+
+config_type 取值：fields, profile, aggregation。
+
+doc_type 为 '*' 时表示全局定义（仅 fields 使用），其他情况为具体文档类型。
+
+config_type = 'fields'：
+
+顶层必须包含 "fields" 对象。
+
+"fields" 的每个键为字段名，值为该字段的定义对象。
+
+字段定义对象可包含：
+
+type: 字符串，可选值 "string", "number", "list", "object"。
+
+description: 字符串，字段描述（可选）。
+
+item_schema: 当 type="list" 时，定义列表中每个元素的类型（嵌套 JSON Schema）。
+
+properties: 当 type="object" 时，定义对象的属性（嵌套 JSON Schema）。
+
+示例：
+
+json
+{
+  "fields": {
+    "amount": { "type": "number", "description": "总金额" },
+    "commodities": {
+      "type": "list",
+      "description": "货物清单",
+      "item_schema": {
+        "type": "object",
+        "properties": {
+          "hs_code": { "type": "string" },
+          "quantity": { "type": "number" }
+        }
+      }
+    }
+  }
+}
+config_type = 'profile'：
+
+顶层必须包含 "doc_type" 和 "fields"。
+
+"doc_type" 与表的 doc_type 列相同。
+
+"fields" 的每个键为字段名，值为该字段的提取策略对象。
+
+字段策略对象可包含：
+
+pages: 整数数组或特殊字符串 "all", "first", "last"，表示该字段出现在哪些页。
+
+prompt_hint: 字符串，用于指导 VLM 提取该字段的提示词。
+
+可选 post_process: 字符串，后处理规则（如 "strip", "to_number"）。
+
+示例：
+
+json
+{
+  "doc_type": "invoice",
+  "fields": {
+    "amount": {
+      "pages": [1],
+      "prompt_hint": "提取发票总金额，仅输出数字"
+    },
+    "commodities": {
+      "pages": "all",
+      "prompt_hint": "提取货物清单，输出 JSON 数组"
+    }
+  }
+}
+config_type = 'aggregation'：
+
+顶层是一个对象，键为字段名，值为聚合策略（字符串）。
+
+策略取值："first_non_null", "last_non_null", "max_confidence", "merge_lists"。
+
+示例：
+
+json
+{
+  "amount": "max_confidence",
+  "commodities": "merge_lists",
+  "lc_number": "first_non_null"
+}
+格式要求：
+
+使用 Markdown 输出，包含代码块和表格。
+
+提供完整的校验规则说明。
+
+给出至少一个完整示例（涵盖三种配置类型）。
+
+请生成该文档内容，确保清晰准确，便于开发者理解和编写配置。
