@@ -33,6 +33,7 @@ from online.minio_upload import upload_to_minio, MinioUploadError
 from online.page_processor import process_page
 from online.pipeline import execute_pre_process_pipeline
 from online.trace_manager import TraceManager
+from online.routers import template_generator
 
 # 加载 .env 文件
 load_dotenv()
@@ -160,6 +161,9 @@ app = FastAPI(
     description="智能单据解析服务 - 支持配置模板化与分流决策追踪",
     lifespan=lifespan,
 )
+
+# 注册路由
+app.include_router(template_generator.router)
 
 
 def _get_fields_for_page(
