@@ -8,7 +8,9 @@ Philsee 是一个基于 FastAPI 的智能单据解析服务，支持多页文档
 - **字段智能提取**：使用 VLM（视觉大模型）提取指定字段
 - **跨页聚合**：支持多种聚合策略（first_non_null, last_non_null, max_confidence, merge_lists）
 - **异步处理**：全异步架构，高性能处理
-- **配置版本化**：支持配置版本管理，灵活切换
+- **配置模板化**：通过模板组合管理配置，支持版本控制
+- **权重分流**：支持按权重随机选择模板版本，便于 A/B 测试
+- **决策追踪**：记录详细的分流决策过程，便于调试和分析
 
 ## 目录结构
 
@@ -18,7 +20,7 @@ philsee/
 │   ├── __init__.py
 │   ├── image_preprocess.py     # 图像预处理
 │   ├── minio_upload.py         # MinIO 上传
-│   ├── config_loader.py        # 配置加载
+│   ├── config_loader.py        # 配置加载（模板化）
 │   ├── vlm_client.py           # VLM 客户端
 │   ├── field_extractor.py      # 字段提取
 │   ├── page_processor.py       # 单页处理
@@ -28,6 +30,8 @@ philsee/
 │   └── main_api.py             # FastAPI 入口
 ├── sql/
 │   └── init_db.sql             # 数据库初始化脚本
+├── develop/script/streamlit/
+│   └── config_ui.py            # Streamlit 配置管理工具
 ├── .env.example                # 环境变量模板
 ├── requirements.txt            # 依赖列表
 └── README.md                   # 说明文档
@@ -109,14 +113,22 @@ uvicorn online.main_api:app --host 0.0.0.0 --port 8000 --workers 4
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| doc_type | string | 是 | 单据类型（如 `letter_of_credit`） |
+| doc_type | string | 二选一 | 单据类型（如 `letter_of_credit`） |
+| template_id | string | 二选一 | 模板编号（优先级高于 doc_type） |
 | images | file[] | 是 | 图片文件列表 |
 
 **示例请求：**
 
 ```bash
+# 使用 doc_type（会自动映射到默认模板）
 curl -X POST "http://localhost:8000/parse" \
   -F "doc_type=letter_of_credit" \
+  -F "images=@page1.jpg" \
+  -F "images=@page2.jpg"
+
+# 使用 template_id（指定具体模板）
+curl -X POST "http://localhost:8000/parse" \
+  -F "template_id=lc_extraction" \
   -F "images=@page1.jpg" \
   -F "images=@page2.jpg"
 ```
@@ -133,6 +145,11 @@ curl -X POST "http://localhost:8000/parse" \
     "date": "2024-01-15"
   },
   "warnings": [],
+  "template": {
+    "template_id": "lc_extraction",
+    "version": "v1.0.0",
+    "weight": 100
+  },
   "elapsed": 12.34
 }
 ```
@@ -155,13 +172,55 @@ curl http://localhost:8000/state/a1b2c3d4e5f6...
 
 ## 配置说明
 
-### 配置结构
+### 配置架构（v2.0）
 
-系统配置存储在 MySQL 的 `config_versions` 表中，包含三种类型：
+系统采用**配置模板化**架构，包含以下核心表：
 
-1. **fields** - 全局字段定义（定义字段名称和类型）
-2. **profile** - 单据类型的字段策略（定义提取规则）
-3. **aggregation** - 聚合规则（定义跨页合并策略）
+| 表名 | 说明 |
+|------|------|
+| `config_versions` | 配置版本表，存储 fields、profile、aggregation 配置的历史版本 |
+| `config_templates` | 配置模板表，组合三个配置版本，支持权重分流 |
+
+### 配置类型
+
+1. **fields** - 全局字段定义
+   - 定义字段名称和类型
+   - `doc_type` 固定为 `*`（全局）
+
+2. **profile** - 字段策略配置
+   - 定义每种文档类型的字段提取规则
+   - 包含 `prompt_hint`（提示词）和 `pages`（提取页码策略）
+
+3. **aggregation** - 聚合规则
+   - 定义跨页合并策略
+
+### 模板管理
+
+模板（`config_templates`）将三种配置组合在一起：
+
+```sql
+-- 示例：信用证解析模板
+INSERT INTO config_templates (
+    template_id, version, doc_type, description,
+    fields_config_id, profile_config_id, aggregation_config_id,
+    is_active, weight
+) VALUES (
+    'lc_extraction', 'v1.0.0', 'letter_of_credit', '信用证解析默认模板',
+    1, 2, 3,  -- 分别指向 config_versions 表的 ID
+    TRUE, 100
+);
+```
+
+### 权重分流
+
+当同一 `template_id` 下有多个激活版本时，系统按权重随机选择：
+
+```sql
+-- 示例：A/B 测试配置
+-- v1.0.0 权重 80%，v2.0.0 权重 20%
+INSERT INTO config_templates (...) VALUES ('lc_extraction', 'v1.0.0', ..., TRUE, 80);
+INSERT INTO config_templates (...) VALUES ('lc_extraction', 'v2.0.0', ..., TRUE, 20);
+```
 
 ### 聚合策略
 
@@ -172,6 +231,48 @@ curl http://localhost:8000/state/a1b2c3d4e5f6...
 | `max_confidence` | 取置信度最高的值 |
 | `merge_lists` | 合并所有页的列表 |
 
+### 决策追踪
+
+每次请求的分流决策过程会记录在 `requests.trace` 字段中：
+
+```json
+{
+  "doc_type": "letter_of_credit",
+  "resolved_template_id": "lc_extraction",
+  "candidates": [
+    {"version": "v1.0.0", "weight": 80, "id": 1},
+    {"version": "v2.0.0", "weight": 20, "id": 2}
+  ],
+  "total_weight": 100,
+  "random_value": 65,
+  "selected_index": 0,
+  "selected_version": "v1.0.0",
+  "warning": null
+}
+```
+
+## 配置管理工具
+
+使用 Streamlit 提供可视化的配置管理界面：
+
+```bash
+# 启动配置管理工具
+cd develop/script/streamlit
+streamlit run config_ui.py
+```
+
+### 功能模块
+
+1. **配置版本管理**
+   - 查看、新增、删除配置版本
+   - 支持 fields、profile、aggregation 三种类型
+
+2. **模板管理**
+   - 查看所有模板（按 template_id 分组）
+   - 新增模板：选择三个配置版本组合
+   - 编辑模板：修改权重、激活状态、描述
+   - 权重校验：显示同一 template_id 下权重总和
+
 ## 开发说明
 
 ### 模块依赖关系
@@ -180,12 +281,13 @@ curl http://localhost:8000/state/a1b2c3d4e5f6...
 main_api.py
 ├── image_preprocess.py
 ├── minio_upload.py
-├── config_loader.py
+├── config_loader.py  ← 模板化配置加载
+│   └── (config_versions, config_templates 表)
 ├── page_processor.py
 │   └── field_extractor.py
 │       └── vlm_client.py
 ├── aggregator.py
-├── db_writer.py
+├── db_writer.py  ← 记录模板信息和分流决策
 └── trace_manager.py
 ```
 
@@ -213,6 +315,27 @@ main_api.py
 3. **VLM 调用失败**
    - 检查 VLM_ENDPOINT 是否正确
    - 确认 API Key 有效
+
+4. **配置加载失败**
+   - 检查 `config_templates` 表是否有对应 doc_type 的激活模板
+   - 检查 `config_versions` 表中对应的配置 ID 是否存在
+   - 使用配置管理工具检查权重配置是否正确
+
+5. **权重分流不符合预期**
+   - 检查权重总和是否为 100
+   - 查看 `requests.trace` 字段了解分流决策过程
+
+## 版本历史
+
+### v2.0.0
+- 配置模板化：通过 config_templates 表管理配置组合
+- 权重分流：支持按权重随机选择模板版本
+- 决策追踪：记录详细的分流决策过程
+- 移除 config_versions 表的 is_active 字段
+
+### v1.0.0
+- 基础功能：多页文档处理、字段提取、跨页聚合
+- 配置版本化：支持配置版本管理
 
 ## License
 

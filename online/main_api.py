@@ -3,6 +3,11 @@ FastAPI 应用入口
 
 整合所有模块，提供 /parse 端点用于处理单据解析请求。
 支持多图片上传，异步处理，完整的错误处理和日志记录。
+
+v2.0 更新：
+- 支持配置模板化
+- 支持按权重分流
+- 记录分流决策追踪信息
 """
 
 import asyncio
@@ -150,8 +155,8 @@ async def lifespan(app: FastAPI):
 # 创建 FastAPI 应用
 app = FastAPI(
     title="Philsee Document Parser",
-    version="1.0.0",
-    description="智能单据解析服务",
+    version="2.0.0",
+    description="智能单据解析服务 - 支持配置模板化与分流决策追踪",
     lifespan=lifespan,
 )
 
@@ -212,7 +217,8 @@ def _get_fields_for_page(
 
 @app.post("/parse")
 async def parse_document(
-    doc_type: str = Form(..., description="单据类型"),
+    doc_type: Optional[str] = Form(None, description="单据类型（与 template_id 至少填一个）"),
+    template_id: Optional[str] = Form(None, description="模板编号（优先级高于 doc_type）"),
     images: list[UploadFile] = File(..., description="图片文件列表"),
 ) -> JSONResponse:
     """
@@ -221,23 +227,33 @@ async def parse_document(
     接收单据类型和多个图片文件，执行以下操作：
     1. 生成 trace_id
     2. 预处理所有图片
-    3. 加载配置
+    3. 解析模板并加载配置（支持按权重分流）
     4. 逐页提取字段
     5. 聚合结果
-    6. 存储到数据库
+    6. 存储到数据库（包含分流决策追踪）
 
     Args:
         doc_type: 单据类型（如 "letter_of_credit"）。
+        template_id: 模板编号（如 "lc_extraction"），优先级高于 doc_type。
         images: 图片文件列表。
 
     Returns:
         JSONResponse: 解析结果或错误信息。
     """
+    # 参数校验
+    if doc_type is None and template_id is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "必须提供 doc_type 或 template_id 参数"},
+        )
+
     # 生成 trace_id
     trace_id = trace_manager.new_trace()
     start_time = time.monotonic()
 
-    logger.info(f"[{trace_id}] 开始处理请求: doc_type={doc_type}, images={len(images)}")
+    logger.info(
+        f"[{trace_id}] 开始处理请求: doc_type={doc_type}, template_id={template_id}, images={len(images)}"
+    )
 
     try:
         # 更新状态
@@ -285,17 +301,25 @@ async def parse_document(
 
         logger.info(f"[{trace_id}] MinIO 上传完成: {len(minio_paths)} 张")
 
-        # 3. 加载配置
+        # 3. 加载配置（通过模板方式）
         trace_manager.update_state(trace_id, {"status": "loading_config"})
 
-        db_url = config.get_db_url()
-        loaded_config = await load_config(db_url, doc_type)
+        async with async_session() as session:
+            loaded_config = await load_config(
+                session=session,
+                doc_type=doc_type,
+                template_id=template_id,
+            )
 
         fields_schema = loaded_config["fields_schema"]
         profile = loaded_config["profile"]
         agg_rules = loaded_config["agg_rules"]
+        template_info = loaded_config["template"]
+        resolve_trace = loaded_config["trace"]
 
-        logger.info(f"[{trace_id}] 配置加载完成")
+        logger.info(
+            f"[{trace_id}] 配置加载完成: template={template_info['template_id']}@{template_info['version']}"
+        )
 
         # 4. 逐页提取字段（串行，利用前缀缓存）
         trace_manager.update_state(trace_id, {"status": "extracting"})
@@ -350,12 +374,16 @@ async def parse_document(
             await save_results(
                 session=session,
                 trace_id=trace_id,
-                doc_type=doc_type,
+                doc_type=doc_type or template_info.get("doc_type", "unknown"),
                 total_pages=total_pages,
                 final_fields=final_fields,
                 warnings=warnings,
                 page_results=all_page_results,
                 agg_decisions=agg_decisions,
+                template_id=template_info["template_id"],
+                template_version=template_info["version"],
+                selected_weight=template_info["weight"],
+                resolve_trace=resolve_trace,
             )
 
         logger.info(f"[{trace_id}] 数据库存储完成")
@@ -372,6 +400,7 @@ async def parse_document(
                 "trace_id": trace_id,
                 "fields": final_fields,
                 "warnings": warnings,
+                "template": template_info,
                 "elapsed": round(elapsed, 2),
             },
         )

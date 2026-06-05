@@ -1,8 +1,8 @@
 """
-数据库写入模块
+数据库写入模块（v2.0 - 配置模板化 + 分流决策追踪）
 
 将处理结果写入 MySQL 数据库，包括：
-- requests: 请求主记录
+- requests: 请求主记录（包含模板和分流决策追踪信息）
 - field_extractions: 每页每个字段的提取详情
 - agg_decisions: 聚合决策记录
 
@@ -12,7 +12,7 @@
 import json
 import logging
 from decimal import Decimal
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,6 +75,10 @@ async def save_results(
     warnings: list[dict[str, Any]],
     page_results: list[list[dict[str, Any]]],
     agg_decisions: dict[str, Any],
+    template_id: Optional[str] = None,
+    template_version: Optional[str] = None,
+    selected_weight: Optional[int] = None,
+    resolve_trace: Optional[dict[str, Any]] = None,
 ) -> None:
     """
     将处理结果保存到数据库。
@@ -91,13 +95,17 @@ async def save_results(
         warnings: 警告列表。
         page_results: 所有页的提取结果。
         agg_decisions: 聚合决策字典。
+        template_id: 使用的模板编号。
+        template_version: 使用的模板版本。
+        selected_weight: 命中模板版本的权重。
+        resolve_trace: 分流决策追踪信息。
 
     Raises:
         DatabaseWriterError: 数据库写入失败时抛出。
     """
     logger.info(
         f"开始保存结果: trace_id={trace_id}, doc_type={doc_type}, "
-        f"total_pages={total_pages}"
+        f"total_pages={total_pages}, template={template_id}@{template_version}"
     )
 
     try:
@@ -109,6 +117,10 @@ async def save_results(
             total_pages=total_pages,
             final_fields=final_fields,
             warnings=warnings,
+            template_id=template_id,
+            template_version=template_version,
+            selected_weight=selected_weight,
+            resolve_trace=resolve_trace,
         )
         logger.info(f"requests 记录已插入: trace_id={trace_id}")
 
@@ -147,6 +159,10 @@ async def _insert_request(
     total_pages: int,
     final_fields: dict[str, Any],
     warnings: list[dict[str, Any]],
+    template_id: Optional[str] = None,
+    template_version: Optional[str] = None,
+    selected_weight: Optional[int] = None,
+    resolve_trace: Optional[dict[str, Any]] = None,
 ) -> None:
     """
     插入 requests 记录。
@@ -158,16 +174,25 @@ async def _insert_request(
         total_pages: 总页数。
         final_fields: 最终字段字典。
         warnings: 警告列表。
+        template_id: 使用的模板编号。
+        template_version: 使用的模板版本。
+        selected_weight: 命中模板版本的权重。
+        resolve_trace: 分流决策追踪信息。
     """
     final_fields_json = json.dumps(
         _convert_value_for_json(final_fields), ensure_ascii=False
     )
     warnings_json = json.dumps(warnings, ensure_ascii=False)
+    trace_json = json.dumps(_convert_value_for_json(resolve_trace), ensure_ascii=False) if resolve_trace else None
 
     sql = text(
         """
-        INSERT INTO requests (trace_id, doc_type, total_pages, final_fields, warnings)
-        VALUES (:trace_id, :doc_type, :total_pages, :final_fields, :warnings)
+        INSERT INTO requests
+        (trace_id, doc_type, total_pages, final_fields, warnings,
+         template_id, template_version, selected_weight, trace)
+        VALUES
+        (:trace_id, :doc_type, :total_pages, :final_fields, :warnings,
+         :template_id, :template_version, :selected_weight, :trace)
         """
     )
 
@@ -179,6 +204,10 @@ async def _insert_request(
             "total_pages": total_pages,
             "final_fields": final_fields_json,
             "warnings": warnings_json,
+            "template_id": template_id,
+            "template_version": template_version,
+            "selected_weight": selected_weight,
+            "trace": trace_json,
         },
     )
 
@@ -310,6 +339,8 @@ async def create_tables(engine, dialect: str = "mysql") -> None:
     """
     创建数据库表（如果不存在）。
 
+    注意：此函数仅创建基础表结构，完整的表结构请使用 sql/init_db.sql 初始化脚本。
+
     Args:
         engine: SQLAlchemy 异步引擎。
         dialect: 数据库类型 ("mysql" 或 "sqlite")。
@@ -319,10 +350,14 @@ async def create_tables(engine, dialect: str = "mysql") -> None:
         create_requests = """
         CREATE TABLE IF NOT EXISTS requests (
             trace_id VARCHAR(64) PRIMARY KEY,
-            doc_type VARCHAR(32) NOT NULL,
+            doc_type VARCHAR(64) NOT NULL,
             total_pages INT,
             final_fields TEXT,
             warnings TEXT,
+            template_id VARCHAR(64),
+            template_version VARCHAR(32),
+            selected_weight INT,
+            trace TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -353,6 +388,38 @@ async def create_tables(engine, dialect: str = "mysql") -> None:
         )
         """
 
+        create_config_versions = """
+        CREATE TABLE IF NOT EXISTS config_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version_tag VARCHAR(64) NOT NULL,
+            doc_type VARCHAR(64) NOT NULL,
+            config_type VARCHAR(32) NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by VARCHAR(64),
+            is_deleted BOOLEAN DEFAULT FALSE
+        )
+        """
+
+        create_config_templates = """
+        CREATE TABLE IF NOT EXISTS config_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id VARCHAR(64) NOT NULL,
+            version VARCHAR(32) NOT NULL,
+            doc_type VARCHAR(64) NOT NULL,
+            description TEXT,
+            fields_config_id INT NOT NULL,
+            profile_config_id INT NOT NULL,
+            aggregation_config_id INT NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            weight INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by VARCHAR(64),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by VARCHAR(64)
+        )
+        """
+
         create_index = """
         CREATE INDEX IF NOT EXISTS idx_field_extractions
         ON field_extractions(trace_id, page_num)
@@ -362,11 +429,17 @@ async def create_tables(engine, dialect: str = "mysql") -> None:
         create_requests = """
         CREATE TABLE IF NOT EXISTS requests (
             trace_id VARCHAR(64) PRIMARY KEY,
-            doc_type VARCHAR(32) NOT NULL,
+            doc_type VARCHAR(64) NOT NULL,
             total_pages INT,
             final_fields JSON,
             warnings JSON,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            template_id VARCHAR(64),
+            template_version VARCHAR(32),
+            selected_weight INT,
+            trace JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_doc_type (doc_type),
+            INDEX idx_template_id (template_id)
         )
         """
 
@@ -397,9 +470,47 @@ async def create_tables(engine, dialect: str = "mysql") -> None:
         )
         """
 
+        create_config_versions = """
+        CREATE TABLE IF NOT EXISTS config_versions (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            version_tag VARCHAR(64) NOT NULL,
+            doc_type VARCHAR(64) NOT NULL,
+            config_type ENUM('fields','profile','aggregation') NOT NULL,
+            content JSON NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by VARCHAR(64),
+            is_deleted BOOLEAN DEFAULT FALSE,
+            UNIQUE KEY uk_unique (doc_type, config_type, version_tag)
+        )
+        """
+
+        create_config_templates = """
+        CREATE TABLE IF NOT EXISTS config_templates (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            template_id VARCHAR(64) NOT NULL,
+            version VARCHAR(32) NOT NULL,
+            doc_type VARCHAR(64) NOT NULL,
+            description TEXT,
+            fields_config_id INT NOT NULL,
+            profile_config_id INT NOT NULL,
+            aggregation_config_id INT NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            weight INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by VARCHAR(64),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            updated_by VARCHAR(64),
+            UNIQUE KEY uk_template_version (template_id, version),
+            KEY idx_doc_type (doc_type),
+            KEY idx_active (template_id, is_active)
+        )
+        """
+
         create_index = None
 
     async with engine.begin() as conn:
+        await conn.execute(text(create_config_versions))
+        await conn.execute(text(create_config_templates))
         await conn.execute(text(create_requests))
         await conn.execute(text(create_field_extractions))
         await conn.execute(text(create_agg_decisions))
