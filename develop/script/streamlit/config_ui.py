@@ -215,7 +215,7 @@ def get_all_templates() -> list[dict[str, Any]]:
             sql = """
                 SELECT t.id, t.template_id, t.version, t.doc_type, t.description,
                        t.fields_config_id, t.profile_config_id, t.aggregation_config_id,
-                       t.is_active, t.weight, t.created_at, t.created_by, t.updated_at, t.updated_by
+                       t.pre_process, t.is_active, t.weight, t.created_at, t.created_by, t.updated_at, t.updated_by
                 FROM config_templates t
                 ORDER BY t.template_id, t.version DESC
             """
@@ -291,6 +291,7 @@ def save_template(
     fields_config_id: int,
     profile_config_id: int,
     aggregation_config_id: int,
+    pre_process: str,
     is_active: bool,
     weight: int,
     created_by: str
@@ -306,6 +307,7 @@ def save_template(
         fields_config_id: 字段配置 ID。
         profile_config_id: 字段策略配置 ID。
         aggregation_config_id: 聚合规则配置 ID。
+        pre_process: 前处理管道。
         is_active: 是否激活。
         weight: 权重。
         created_by: 创建者。
@@ -325,13 +327,13 @@ def save_template(
             sql = """
                 INSERT INTO config_templates
                 (template_id, version, doc_type, description,
-                 fields_config_id, profile_config_id, aggregation_config_id,
+                 fields_config_id, profile_config_id, aggregation_config_id, pre_process,
                  is_active, weight, created_at, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             cursor.execute(sql, (
                 template_id, version, doc_type, description,
-                fields_config_id, profile_config_id, aggregation_config_id,
+                fields_config_id, profile_config_id, aggregation_config_id, pre_process,
                 is_active, weight, datetime.now(), created_by
             ))
         conn.commit()
@@ -348,6 +350,7 @@ def update_template(
     template_id: str,
     version: str,
     description: Optional[str] = None,
+    pre_process: Optional[str] = None,
     is_active: Optional[bool] = None,
     weight: Optional[int] = None,
     updated_by: str = "streamlit"
@@ -359,6 +362,7 @@ def update_template(
         template_id: 模板编号。
         version: 模板版本。
         description: 模板说明。
+        pre_process: 前处理管道。
         is_active: 是否激活。
         weight: 权重。
         updated_by: 更新者。
@@ -375,6 +379,9 @@ def update_template(
             if description is not None:
                 updates.append("description = %s")
                 params.append(description)
+            if pre_process is not None:
+                updates.append("pre_process = %s")
+                params.append(pre_process)
             if is_active is not None:
                 updates.append("is_active = %s")
                 params.append(is_active)
@@ -600,6 +607,7 @@ def render_templates_tab():
                         with col1:
                             st.markdown(f"**文档类型:** `{v['doc_type']}`")
                             st.markdown(f"**描述:** {v['description'] or '-'}")
+                            st.markdown(f"**前处理管道:** `{v.get('pre_process', '') or '-'}`")
                             st.markdown(f"**配置 ID:** fields={v['fields_config_id']}, profile={v['profile_config_id']}, agg={v['aggregation_config_id']}")
                             st.markdown(f"**创建者:** {v['created_by'] or '-'} | **更新者:** {v['updated_by'] or '-'}")
                         with col2:
@@ -609,6 +617,7 @@ def render_templates_tab():
                                     'template_id': v['template_id'],
                                     'version': v['version'],
                                     'description': v['description'] or '',
+                                    'pre_process': v.get('pre_process', '') or '',
                                     'is_active': v['is_active'],
                                     'weight': v['weight']
                                 }
@@ -635,6 +644,12 @@ def render_templates_tab():
         st.markdown(f"**模板:** `{edit_data['template_id']}` @ `{edit_data['version']}`")
 
         edit_description = st.text_area("描述", value=edit_data['description'], key="edit_desc")
+        edit_pre_process = st.text_input(
+            "前处理管道",
+            value=edit_data.get('pre_process', ''),
+            key="edit_pre_process",
+            help="使用管道符分隔，如: fix_orientation|deskew|scale(1024)"
+        )
         edit_is_active = st.checkbox("是否激活", value=edit_data['is_active'], key="edit_active")
         edit_weight = st.number_input("权重 (0-100)", min_value=0, max_value=100, value=edit_data['weight'], key="edit_weight")
 
@@ -645,6 +660,7 @@ def render_templates_tab():
                     template_id=edit_data['template_id'],
                     version=edit_data['version'],
                     description=edit_description,
+                    pre_process=edit_pre_process,
                     is_active=edit_is_active,
                     weight=edit_weight
                 )
@@ -669,6 +685,12 @@ def render_templates_tab():
         new_template_id = st.text_input("模板编号", placeholder="如: invoice_extraction")
         new_template_version = st.text_input("模板版本", value="v1.0.0")
         new_template_doc_type = st.text_input("文档类型", placeholder="如: invoice")
+        new_template_pre_process = st.text_input(
+            "前处理管道",
+            value="",
+            placeholder="如: fix_orientation|deskew|scale(1024)",
+            help="使用管道符分隔多个处理步骤"
+        )
     with col2:
         new_template_description = st.text_area("模板说明", height=100)
         new_template_is_active = st.checkbox("是否激活", value=True)
@@ -716,6 +738,7 @@ def render_templates_tab():
                 fields_config_id=fields_id,
                 profile_config_id=profile_id,
                 aggregation_config_id=aggregation_id,
+                pre_process=new_template_pre_process.strip(),
                 is_active=new_template_is_active,
                 weight=new_template_weight,
                 created_by=new_template_created_by.strip() or "streamlit"

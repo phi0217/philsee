@@ -11,6 +11,7 @@ import time
 from typing import Any, Optional
 
 from online.field_extractor import extract_field, FieldExtractionError
+from online.pipeline import execute_post_process_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,20 @@ async def process_page(
                 vlm_config=vlm_config,
                 system_prompt=system_prompt,
             )
+
+            # 执行后处理管道（如果有配置）
+            post_process = field_config.get("post_process", "")
+            if post_process and value is not None:
+                try:
+                    value = execute_post_process_pipeline(value, post_process)
+                    logger.debug(
+                        f"第 {page_num} 页 - 字段 '{field_name}' 后处理完成: "
+                        f"pipeline='{post_process}'"
+                    )
+                except ValueError as e:
+                    logger.warning(
+                        f"第 {page_num} 页 - 字段 '{field_name}' 后处理失败: {e}"
+                    )
 
             field_elapsed = time.monotonic() - field_start_time
 

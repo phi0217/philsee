@@ -47,6 +47,7 @@ CREATE TABLE config_templates (
     fields_config_id INT NOT NULL COMMENT '关联 config_versions.id (config_type=fields)',
     profile_config_id INT NOT NULL COMMENT '关联 config_versions.id (config_type=profile)',
     aggregation_config_id INT NOT NULL COMMENT '关联 config_versions.id (config_type=aggregation)',
+    pre_process VARCHAR(255) DEFAULT '' COMMENT '前处理管道，管道符分隔，如 "fix_orientation|deskew|scale(1024)"',
     is_active BOOLEAN DEFAULT TRUE COMMENT '是否启用',
     weight INT NOT NULL DEFAULT 0 COMMENT '分流权重（0-100），同一 template_id 下所有 is_active=1 的版本权重和应为 100',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -208,12 +209,12 @@ VALUES (6, 'v1.0.0', 'invoice', 'aggregation', '{
 -- ============================================================
 
 -- 1. letter_of_credit 默认模板（100% 权重）
-INSERT INTO config_templates (template_id, version, doc_type, description, fields_config_id, profile_config_id, aggregation_config_id, is_active, weight, created_by)
-VALUES ('lc_extraction', 'v1.0.0', 'letter_of_credit', '信用证解析默认模板', 1, 2, 3, TRUE, 100, 'system');
+INSERT INTO config_templates (template_id, version, doc_type, description, fields_config_id, profile_config_id, aggregation_config_id, pre_process, is_active, weight, created_by)
+VALUES ('lc_extraction', 'v1.0.0', 'letter_of_credit', '信用证解析默认模板', 1, 2, 3, 'fix_orientation|deskew|scale(1024)', TRUE, 100, 'system');
 
 -- 2. invoice 默认模板（100% 权重）
-INSERT INTO config_templates (template_id, version, doc_type, description, fields_config_id, profile_config_id, aggregation_config_id, is_active, weight, created_by)
-VALUES ('invoice_extraction', 'v1.0.0', 'invoice', '发票解析默认模板', 1, 5, 6, TRUE, 100, 'system');
+INSERT INTO config_templates (template_id, version, doc_type, description, fields_config_id, profile_config_id, aggregation_config_id, pre_process, is_active, weight, created_by)
+VALUES ('invoice_extraction', 'v1.0.0', 'invoice', '发票解析默认模板', 1, 5, 6, 'fix_orientation|scale(1024)', TRUE, 100, 'system');
 
 -- ============================================================
 -- 完成提示

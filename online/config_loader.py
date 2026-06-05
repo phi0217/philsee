@@ -63,6 +63,7 @@ class ConfigTemplate(Base):
     fields_config_id: Mapped[int] = mapped_column(nullable=False)
     profile_config_id: Mapped[int] = mapped_column(nullable=False)
     aggregation_config_id: Mapped[int] = mapped_column(nullable=False)
+    pre_process: Mapped[Optional[str]] = mapped_column(default="")
     is_active: Mapped[bool] = mapped_column(default=True)
     weight: Mapped[int] = mapped_column(nullable=False, default=0)
     created_at: Mapped[Optional[str]] = mapped_column(default=None)
@@ -151,6 +152,7 @@ async def get_active_templates(
                 "fields_config_id": t.fields_config_id,
                 "profile_config_id": t.profile_config_id,
                 "aggregation_config_id": t.aggregation_config_id,
+                "pre_process": t.pre_process or "",
                 "weight": t.weight,
             }
             for t in templates
@@ -360,6 +362,7 @@ async def load_config(
                 "template_id": template["template_id"],
                 "version": template["version"],
                 "weight": template["weight"],
+                "pre_process": template.get("pre_process", ""),
             },
             "trace": trace,
         }

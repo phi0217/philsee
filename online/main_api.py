@@ -31,6 +31,7 @@ from online.field_extractor import FieldExtractionError
 from online.image_preprocess import encode_to_base64, preprocess_image
 from online.minio_upload import upload_to_minio, MinioUploadError
 from online.page_processor import process_page
+from online.pipeline import execute_pre_process_pipeline
 from online.trace_manager import TraceManager
 
 # 加载 .env 文件
@@ -259,16 +260,63 @@ async def parse_document(
         # 更新状态
         trace_manager.update_state(trace_id, {"status": "preprocessing", "doc_type": doc_type})
 
-        # 1. 读取并预处理所有图片（并行）
-        async def process_upload_image(upload_file: UploadFile, idx: int) -> tuple[bytes, str, str]:
-            """处理单个上传的图片"""
+        # 1. 读取原始图片
+        async def read_upload_image(upload_file: UploadFile, idx: int) -> bytes:
+            """读取单个上传的图片"""
             raw_bytes = await upload_file.read()
-            processed = preprocess_image(raw_bytes, config.image_target_short_edge)
+            return raw_bytes
+
+        read_tasks = [read_upload_image(img, idx) for idx, img in enumerate(images)]
+        raw_images = await asyncio.gather(*read_tasks)
+
+        logger.info(f"[{trace_id}] 图片读取完成: {len(raw_images)} 张")
+
+        # 2. 加载配置（通过模板方式）- 提前加载以获取 pre_process
+        trace_manager.update_state(trace_id, {"status": "loading_config"})
+
+        async with async_session() as session:
+            loaded_config = await load_config(
+                session=session,
+                doc_type=doc_type,
+                template_id=template_id,
+            )
+
+        fields_schema = loaded_config["fields_schema"]
+        profile = loaded_config["profile"]
+        agg_rules = loaded_config["agg_rules"]
+        template_info = loaded_config["template"]
+        resolve_trace = loaded_config["trace"]
+        pre_process_pipeline = template_info.get("pre_process", "")
+
+        logger.info(
+            f"[{trace_id}] 配置加载完成: template={template_info['template_id']}@{template_info['version']}"
+        )
+
+        # 3. 预处理所有图片（包含前处理管道和标准预处理）
+        trace_manager.update_state(trace_id, {"status": "preprocessing"})
+
+        async def process_upload_image(raw_bytes: bytes, idx: int) -> tuple[bytes, str, str]:
+            """处理单个图片：前处理管道 -> 标准预处理 -> base64编码"""
+            # 执行前处理管道（如果有配置）
+            if pre_process_pipeline:
+                try:
+                    processed = execute_pre_process_pipeline(raw_bytes, pre_process_pipeline)
+                    logger.debug(f"[{trace_id}] 第 {idx + 1} 页前处理管道完成")
+                except ValueError as e:
+                    logger.warning(f"[{trace_id}] 第 {idx + 1} 页前处理管道失败: {e}，使用原图")
+                    processed = raw_bytes
+            else:
+                processed = raw_bytes
+
+            # 执行标准预处理（缩放）
+            processed = preprocess_image(processed, config.image_target_short_edge)
+
+            # 编码为 base64
             b64 = encode_to_base64(processed)
             return processed, b64, f"page_{idx + 1}.jpg"
 
         preprocess_tasks = [
-            process_upload_image(img, idx) for idx, img in enumerate(images)
+            process_upload_image(raw_bytes, idx) for idx, raw_bytes in enumerate(raw_images)
         ]
         processed_results = await asyncio.gather(*preprocess_tasks)
 
@@ -278,7 +326,7 @@ async def parse_document(
 
         logger.info(f"[{trace_id}] 图片预处理完成: {len(processed_images)} 张")
 
-        # 2. 上传到 MinIO（并行）
+        # 4. 上传到 MinIO（并行）
         trace_manager.update_state(trace_id, {"status": "uploading"})
 
         async def upload_single_image(image_bytes: bytes, obj_name: str) -> str:
@@ -300,26 +348,6 @@ async def parse_document(
         minio_paths = await asyncio.gather(*upload_tasks)
 
         logger.info(f"[{trace_id}] MinIO 上传完成: {len(minio_paths)} 张")
-
-        # 3. 加载配置（通过模板方式）
-        trace_manager.update_state(trace_id, {"status": "loading_config"})
-
-        async with async_session() as session:
-            loaded_config = await load_config(
-                session=session,
-                doc_type=doc_type,
-                template_id=template_id,
-            )
-
-        fields_schema = loaded_config["fields_schema"]
-        profile = loaded_config["profile"]
-        agg_rules = loaded_config["agg_rules"]
-        template_info = loaded_config["template"]
-        resolve_trace = loaded_config["trace"]
-
-        logger.info(
-            f"[{trace_id}] 配置加载完成: template={template_info['template_id']}@{template_info['version']}"
-        )
 
         # 4. 逐页提取字段（串行，利用前缀缓存）
         trace_manager.update_state(trace_id, {"status": "extracting"})
