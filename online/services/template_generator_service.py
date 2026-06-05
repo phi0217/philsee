@@ -12,8 +12,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from online.vlm_client import call_vlm, VLMError
-from online.image_preprocess import preprocess_image, encode_to_base64
+from online.core.vlm_client import call_vlm, VLMError
+from online.processors.image_preprocess import preprocess_image, encode_to_base64
 from online.utils.version_helper import (
     generate_default_template_id,
     generate_template_version,

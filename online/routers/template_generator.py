@@ -11,12 +11,13 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
-from online.image_preprocess import preprocess_image, encode_to_base64
+from online.processors.image_preprocess import preprocess_image, encode_to_base64
 from online.services.template_generator_service import (
     generate_template,
     TemplateGeneratorError,
     ConflictError,
 )
+from online.api.deps import get_db, get_vlm_config
 
 logger = logging.getLogger(__name__)
 
@@ -83,19 +84,11 @@ async def generate_template_endpoint(
 
         logger.info(f"图片预处理完成: {len(images_base64)} 张")
 
-        # 2. 获取全局配置（需要在 main_api 中设置）
-        from online.main_api import config, async_session
-
-        if config is None:
-            return JSONResponse(
-                status_code=500,
-                content={"error": "应用配置未初始化"},
-            )
-
-        vlm_config = config.get_vlm_config()
+        # 2. 获取配置
+        vlm_config = get_vlm_config()
 
         # 3. 调用服务生成模板
-        async with async_session() as session:
+        async for session in get_db():
             result = await generate_template(
                 session=session,
                 images_base64=images_base64,
@@ -104,6 +97,7 @@ async def generate_template_endpoint(
                 version=version,
                 vlm_config=vlm_config,
             )
+            break
 
         logger.info(f"模板生成成功: template_id={result['template_id']}")
 

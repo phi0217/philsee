@@ -1,0 +1,160 @@
+接口开发提示词：POST /generate_template – 自动生成模板配置（默认 template_id 包含时间戳）
+请在 philsee 项目中开发一个新的 FastAPI 接口 /generate_template。该接口接收一份完整单据的所有页面图片（按页码顺序）以及 doc_type，调用 VLM 自动分析图片，生成 fields、profile、aggregation 三套配置，并自动将配置插入 config_versions 表，将模板插入 config_templates 表，返回新创建的模板信息。
+
+重要约束：
+
+所有插入 config_versions 表的记录，其 version_tag 字段直接使用最终的 template_id（规则见下）。
+
+由于 (doc_type, config_type, version_tag) 有唯一索引，如果插入时发生唯一冲突，则返回 409 错误，提示 template_id 已存在（需要用户更换 template_id 或先删除旧配置）。系统不自动覆盖或生成后缀。
+
+config_templates 表中的 version 字段仍然使用自动递增的版本号（如 v1.0.0），与 version_tag 无关。
+
+输入参数（multipart/form-data）
+files: 列表，必须包含该单据的所有页面图片（按页码顺序上传）。至少一张。
+
+doc_type: 字符串，必须，文档类型（如 invoice, letter_of_credit）。
+
+template_id: 字符串，可选，模板业务编号。若未提供，系统自动生成：{doc_type}_default_{timestamp}，其中 timestamp 为 %Y%m%d%H%M%S 格式的当前时间（例如 invoice_default_20250605143000）。这样可以确保每次生成不冲突。
+
+version: 字符串，可选，模板版本号（如 v1.0.0）。若未提供，系统自动生成（查询 config_templates 中该 template_id 下的最大版本，递增规则：若已有 v1.0.0 则生成 v1.0.1；若无则使用 v1.0.0）。
+
+输出（JSON）
+成功时返回：
+
+json
+{
+  "template_id": "invoice_default_20250605143000",
+  "template_version": "v1.0.0",
+  "doc_type": "invoice",
+  "fields_config_id": 101,
+  "profile_config_id": 102,
+  "aggregation_config_id": 103,
+  "message": "Template created successfully"
+}
+失败时返回适当错误信息（如 409 Conflict）。
+
+核心步骤（自动插入数据库，注意唯一约束）
+图片预处理：将所有图片按顺序缩放、编码为 base64（data URL），保持顺序。
+
+确定最终 template_id：
+
+若用户提供了 template_id，则使用该值。
+
+否则，生成 {doc_type}_default_{timestamp}，其中 timestamp 格式 %Y%m%d%H%M%S（例如 invoice_default_20250605143000）。
+
+调用 VLM 生成 fields 配置：
+
+提示词：综合所有图片，生成全局字段定义 JSON。
+
+校验 JSON（必须包含 "fields" 对象）。
+
+检查 (doc_type='*', config_type='fields', version_tag=final_template_id) 是否已存在。若存在，返回 409 错误（提示 template_id 冲突，建议更换）。
+
+插入 config_versions：
+
+doc_type = '*'
+
+config_type = 'fields'
+
+version_tag = final_template_id
+
+content = 生成的JSON
+
+created_by = 'system'
+
+获取 fields_config_id。
+
+调用 VLM 生成 profile 配置：
+
+提示词：基于所有图片和 fields，生成 profile JSON。
+
+校验 JSON（必须包含 doc_type（与用户输入一致）和 fields）。
+
+检查 (doc_type=用户提供的doc_type, config_type='profile', version_tag=final_template_id) 是否已存在。若存在，返回 409。
+
+插入 config_versions，获取 profile_config_id。
+
+调用 VLM 生成 aggregation 配置：
+
+提示词：基于 profile 中的字段列表，生成聚合策略 JSON。
+
+校验 JSON（所有字段名在 profile 中存在，策略合法）。
+
+检查 (doc_type=用户提供的doc_type, config_type='aggregation', version_tag=final_template_id) 是否已存在。若存在，返回 409。
+
+插入 config_versions，获取 aggregation_config_id。
+
+创建模板记录（插入 config_templates）：
+
+生成 template_version（若未提供则自动递增）。
+
+检查 (template_id, version) 唯一性（由数据库唯一约束保证，若冲突则返回 409）。
+
+插入记录：
+
+template_id = final_template_id
+
+version = template_version
+
+doc_type = 用户提供的 doc_type
+
+fields_config_id, profile_config_id, aggregation_config_id
+
+is_active = 1, weight = 100
+
+pre_process = ''
+
+description = f"Auto-generated from {len(files)} sample pages"
+
+created_by = 'system'
+
+提交事务（所有插入在同一事务中，若任何步骤失败则回滚）。
+
+返回结果。
+
+VLM 提示词（同前）
+复用之前设计的提示词，注意在 profile 提示词中传入 doc_type。
+
+代码实现要求
+使用 FastAPI，路由单独文件 online/routers/template_generator.py。
+
+核心服务：online/services/template_generator_service.py。
+
+需要辅助函数：
+
+generate_default_template_id(doc_type: str) -> str：生成 {doc_type}_default_{timestamp}。
+
+check_config_version_exists(doc_type, config_type, version_tag) -> bool
+
+insert_config_version(...) -> int
+
+generate_template_version(template_id: str) -> str（自动递增模板版本）
+
+校验函数。
+
+事务处理：使用 SQLAlchemy 异步引擎的 async with engine.begin() as conn 确保原子性。
+
+错误处理：唯一冲突时捕获 IntegrityError 并转换为 409 响应。
+
+输出要求
+生成以下文件：
+
+online/routers/template_generator.py
+
+online/services/template_generator_service.py
+
+修改 main_api.py 注册路由
+
+tests/test_generate_template.py
+
+辅助函数（如放在 online/utils/version_helper.py 和 online/utils/validator.py）
+
+确保代码异步、完整、可运行，并遵守：
+
+未提供 template_id 时自动生成带时间戳的 ID。
+
+config_versions.version_tag 直接使用该 ID。
+
+唯一冲突返回 409。
+
+开始生成。

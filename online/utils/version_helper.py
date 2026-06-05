@@ -11,7 +11,7 @@ from typing import Optional
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from online.config_loader import ConfigVersion, ConfigTemplate
+from online.models.config import ConfigVersion, ConfigTemplate
 
 logger = logging.getLogger(__name__)
 

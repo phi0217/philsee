@@ -1,0 +1,263 @@
+目录结构优化建议：philsee 通用文档解析系统
+
+一、当前目录结构问题分析
+
+1. online/ 目录下模块文件散乱，缺乏功能分层
+2. develop/script/一阶段/ 与 online/ 存在重复代码，容易混淆
+3. 缺少明确的分层架构（models、schemas、repositories 等）
+4. 配置文件分散，缺少统一的配置管理目录
+5. tests/ 目录结构过于简单，未按模块组织
+
+---
+
+二、优化后的目录结构
+
+philsee/
+├── .env                          # 环境变量（敏感信息，不入库）
+├── .env.example                  # 环境变量示例
+├── .gitignore
+├── .python-version
+├── LICENSE
+├── README.md
+├── requirements.txt
+├── pyproject.toml                # 新增：项目配置（可选替代 requirements.txt）
+│
+├── config/                       # 新增：配置文件目录
+│   ├── __init__.py
+│   ├── settings.py               # 统一配置加载（Pydantic Settings）
+│   ├── default_templates.yaml    # doc_type 到 template_id 的默认映射
+│   └── logging.yaml              # 日志配置
+│
+├── sql/                          # 数据库初始化脚本
+│   ├── init_db.sql
+│   └── migrations/               # 新增：未来迁移脚本目录
+│
+├── online/                       # 主应用目录（重构）
+│   ├── __init__.py
+│   ├── main.py                   # FastAPI 应用入口（原 main_api.py）
+│   │
+│   ├── api/                      # 新增：API 层
+│   │   ├── __init__.py
+│   │   ├── deps.py               # 依赖注入（如 get_db、get_vlm_client）
+│   │   └── routers/              # 路由模块
+│   │       ├── __init__.py
+│   │       ├── extraction.py     # 文档解析接口
+│   │       ├── template.py       # 模板管理接口
+│   │       └── health.py         # 健康检查接口
+│   │
+│   ├── services/                 # 服务层（业务逻辑）
+│   │   ├── __init__.py
+│   │   ├── extraction_service.py # 文档解析服务
+│   │   ├── template_service.py   # 模板生成服务
+│   │   ├── config_service.py     # 配置加载服务（原 config_loader.py）
+│   │   └── storage_service.py    # MinIO 存储服务（原 minio_upload.py）
+│   │
+│   ├── models/                   # 新增：数据库模型层
+│   │   ├── __init__.py
+│   │   ├── base.py               # 基础模型类
+│   │   ├── config.py             # config_versions、config_templates 模型
+│   │   ├── request.py            # requests 模型
+│   │   └── extraction.py         # field_extractions、agg_decisions 模型
+│   │
+│   ├── schemas/                  # 新增：Pydantic 模型（请求/响应结构）
+│   │   ├── __init__.py
+│   │   ├── extraction.py         # 解析请求/响应 Schema
+│   │   ├── template.py           # 模板相关 Schema
+│   │   └── config.py             # 配置相关 Schema
+│   │
+│   ├── repositories/             # 新增：数据访问层
+│   │   ├── __init__.py
+│   │   ├── config_repo.py        # config_versions、config_templates 仓库
+│   │   ├── request_repo.py       # requests 仓库
+│   │   └── extraction_repo.py    # field_extractions、agg_decisions 仓库
+│   │
+│   ├── core/                     # 新增：核心组件
+│   │   ├── __init__.py
+│   │   ├── database.py           # 数据库连接管理
+│   │   ├── vlm_client.py         # VLM 客户端（原 vlm_client.py）
+│   │   └── minio_client.py       # MinIO 客户端
+│   │
+│   ├── processors/               # 处理器模块（原散落的处理逻辑）
+│   │   ├── __init__.py
+│   │   ├── image_preprocess.py   # 图像预处理（原 image_preprocess.py）
+│   │   ├── page_processor.py     # 页面处理器（原 page_processor.py）
+│   │   ├── field_extractor.py    # 字段提取器（原 field_extractor.py）
+│   │   ├── aggregator.py         # 聚合器（原 aggregator.py）
+│   │   └── pipeline.py           # 处理管道（原 pipeline.py）
+│   │
+│   └── utils/                    # 工具函数
+│       ├── __init__.py
+│       ├── validator.py          # 校验工具
+│       ├── version_helper.py     # 版本生成工具
+│       └── trace_manager.py      # 追踪管理器
+│
+├── develop/                      # 开发辅助目录
+│   ├── doc/                      # 设计文档
+│   │   ├── config_versions_content_spec.md
+│   │   └── core_tables_spec.md
+│   ├── prompt/                   # 开发提示词
+│   │   ├── 一阶段/
+│   │   └── 一阶段补充*/
+│   └── scripts/                  # 开发/运维脚本
+│       ├── init_data.py          # 初始化数据脚本
+│       └── batch_import.py       # 批量导入脚本
+│
+├── tests/                        # 测试目录（按模块组织）
+│   ├── __init__.py
+│   ├── conftest.py               # pytest 配置和 fixtures
+│   ├── unit/                     # 单元测试
+│   │   ├── __init__.py
+│   │   ├── test_config_loader.py
+│   │   ├── test_field_extractor.py
+│   │   └── test_aggregator.py
+│   ├── integration/              # 集成测试
+│   │   ├── __init__.py
+│   │   ├── test_extraction_api.py
+│   │   └── test_template_api.py
+│   └── fixtures/                 # 测试数据
+│       ├── sample_images/
+│       └── sample_configs/
+│
+└── scripts/                      # 项目根脚本（新增）
+    ├── start.sh                  # 启动脚本
+    └── docker-build.sh           # Docker 构建脚本
+
+---
+
+三、分层职责说明
+
+1. api/ 层
+   - 负责接收 HTTP 请求、参数校验、响应格式化
+   - 不包含业务逻辑，仅调用 service 层
+   - 通过 deps.py 实现依赖注入
+
+2. services/ 层
+   - 核心业务逻辑所在
+   - 协调多个 repository、processor 完成业务流程
+   - 处理事务边界
+
+3. models/ 层
+   - SQLAlchemy ORM 模型定义
+   - 与数据库表一一对应
+
+4. schemas/ 层
+   - Pydantic 模型定义
+   - 用于请求验证和响应序列化
+   - 与 API 接口契约对应
+
+5. repositories/ 层
+   - 封装数据库操作
+   - 提供 CRUD 方法
+   - 隔离 SQL 细节
+
+6. processors/ 层
+   - 文档处理管道的各个阶段
+   - 可独立测试、可组合
+
+---
+
+四、迁移步骤
+
+第一步：创建新目录结构
+mkdir -p online/{api,services,models,schemas,repositories,core,processors}
+mkdir -p tests/{unit,integration,fixtures}
+
+第二步：迁移核心文件
+- main_api.py → online/main.py
+- config_loader.py → online/services/config_service.py
+- vlm_client.py → online/core/vlm_client.py
+- minio_upload.py → online/services/storage_service.py
+
+第三步：创建模型层
+- 从 init_db.sql 反向生成 SQLAlchemy 模型
+- 或手动定义 models/*.py
+
+第四步：创建 Schema 层
+- 根据接口文档定义请求/响应 Schema
+
+第五步：重构 API 层
+- 将路由逻辑拆分到 api/routers/
+
+第六步：更新测试目录
+- 按 unit/integration 分类组织测试
+
+---
+
+五、保留开发记录
+
+以下目录作为开发历史记录保留，不删除：
+- develop/script/一阶段/      # 一阶段开发代码记录，保留备查
+- develop/script/streamlit/   # Streamlit UI 工具
+
+注意：后续开发以 online/ 目录为准，develop/script/ 仅作为历史参考。
+
+---
+
+六、依赖注入示例
+
+online/api/deps.py:
+
+```python
+from functools import lru_cache
+from typing import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from config.settings import settings
+
+engine = create_async_engine(settings.database_url, echo=settings.debug)
+AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
+
+@lru_cache
+def get_vlm_client():
+    from online.core.vlm_client import VLMClient
+    return VLMClient(settings.vlm_api_key, settings.vlm_base_url)
+```
+
+---
+
+七、配置管理示例
+
+config/settings.py:
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # 数据库
+    database_url: str
+
+    # VLM
+    vlm_api_key: str
+    vlm_base_url: str
+
+    # MinIO
+    minio_endpoint: str
+    minio_access_key: str
+    minio_secret_key: str
+    minio_bucket: str
+
+    # 应用
+    debug: bool = False
+    app_name: str = "Philsee Document Parser"
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+---
+
+八、优化收益
+
+1. 清晰的分层架构，降低耦合度
+2. 便于单元测试（每层可独立 mock）
+3. 代码职责明确，新人易于上手
+4. 符合 FastAPI 最佳实践
+5. 为后续微服务化预留空间
