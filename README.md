@@ -16,22 +16,45 @@ Philsee 是一个基于 FastAPI 的智能单据解析服务，支持多页文档
 
 ```
 philsee/
-├── online/                     # 主代码包
-│   ├── __init__.py
-│   ├── image_preprocess.py     # 图像预处理
-│   ├── minio_upload.py         # MinIO 上传
-│   ├── config_loader.py        # 配置加载（模板化）
-│   ├── vlm_client.py           # VLM 客户端
-│   ├── field_extractor.py      # 字段提取
-│   ├── page_processor.py       # 单页处理
-│   ├── aggregator.py           # 跨页聚合
-│   ├── db_writer.py            # 数据库写入
-│   ├── trace_manager.py        # 请求追踪
-│   └── main_api.py             # FastAPI 入口
+├── online/                     # 主代码包（分层架构）
+│   ├── api/                    # API 层
+│   │   └── routers/            # 路由模块
+│   │       └── extraction.py   # 文档解析接口
+│   ├── services/               # 服务层（业务逻辑）
+│   │   ├── config_service.py   # 配置加载服务
+│   │   ├── aggregator_service.py
+│   │   ├── db_service.py
+│   │   └── template_generator_service.py
+│   ├── models/                 # 数据库模型层（SQLAlchemy ORM）
+│   │   ├── config.py           # config_versions、config_templates 模型
+│   │   └── request.py          # requests 模型
+│   ├── schemas/                # Pydantic 模型（请求/响应结构）
+│   ├── repositories/           # 数据访问层
+│   │   ├── config_repo.py
+│   │   ├── request_repo.py
+│   │   └── extraction_repo.py
+│   ├── core/                   # 核心组件
+│   │   ├── database.py         # 数据库连接管理
+│   │   ├── vlm_client.py       # VLM 客户端
+│   │   └── trace_manager.py    # 追踪管理器
+│   ├── processors/             # 处理器模块
+│   │   ├── image_preprocess.py # 图像预处理
+│   │   ├── page_processor.py   # 页面处理器
+│   │   ├── field_extractor.py  # 字段提取器
+│   │   ├── aggregator.py       # 聚合器
+│   │   └── pipeline.py         # 处理管道
+│   ├── utils/                  # 工具函数
+│   ├── main.py                 # FastAPI 应用入口
+│   └── main_api.py             # 旧入口（已废弃，保留兼容）
+├── config/                     # 配置管理
+│   └── settings.py             # Pydantic Settings 配置
 ├── sql/
 │   └── init_db.sql             # 数据库初始化脚本
-├── develop/script/streamlit/
-│   └── config_ui.py            # Streamlit 配置管理工具
+├── develop/                    # 开发辅助
+│   ├── doc/                    # 设计文档
+│   ├── prompt/                 # 开发提示词（历史记录）
+│   └── script/                 # 开发脚本
+├── tests/                      # 测试目录
 ├── .env.example                # 环境变量模板
 ├── requirements.txt            # 依赖列表
 └── README.md                   # 说明文档
