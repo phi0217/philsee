@@ -5,7 +5,6 @@
 """
 
 import logging
-from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -26,17 +25,6 @@ async_session_factory = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
-
-
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """
-    获取数据库会话的依赖注入函数。
-
-    Yields:
-        AsyncSession: 数据库会话实例。
-    """
-    async with async_session_factory() as session:
-        yield session
 
 
 async def init_database() -> None:

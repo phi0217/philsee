@@ -17,7 +17,8 @@ from online.services.template_generator_service import (
     TemplateGeneratorError,
     ConflictError,
 )
-from online.api.deps import get_db, get_vlm_config
+from online.core.database import async_session_factory
+from online.api.deps import get_vlm_config
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ async def generate_template_endpoint(
         vlm_config = get_vlm_config()
 
         # 3. 调用服务生成模板
-        async for session in get_db():
+        async with async_session_factory() as session:
             result = await generate_template(
                 session=session,
                 images_base64=images_base64,
@@ -97,7 +98,6 @@ async def generate_template_endpoint(
                 version=version,
                 vlm_config=vlm_config,
             )
-            break
 
         logger.info(f"模板生成成功: template_id={result['template_id']}")
 

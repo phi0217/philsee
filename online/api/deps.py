@@ -4,24 +4,8 @@ API 依赖注入模块
 提供 FastAPI 依赖注入函数。
 """
 
-from typing import AsyncGenerator
-
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from online.core.database import async_session_factory, engine
 from online.core.trace_manager import get_trace_manager, TraceManager
 from config.settings import settings
-
-
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """
-    获取数据库会话的依赖注入函数。
-
-    Yields:
-        AsyncSession: 数据库会话实例。
-    """
-    async with async_session_factory() as session:
-        yield session
 
 
 def get_vlm_config() -> dict:

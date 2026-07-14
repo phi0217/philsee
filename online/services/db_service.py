@@ -6,7 +6,7 @@
 - field_extractions: 每页每个字段的提取详情
 - agg_decisions: 聚合决策记录
 
-使用异步 SQLAlchemy 引擎，支持批量插入以提高效率。
+使用 Repository 层进行数据库操作。
 """
 
 import json
@@ -16,6 +16,9 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from online.repositories.request_repo import RequestRepository
+from online.repositories.extraction_repo import ExtractionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,6 @@ def _convert_value_for_json(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, (list, dict)):
-        # 递归处理列表和字典中的元素
         if isinstance(value, list):
             return [_convert_value_for_json(item) for item in value]
         else:
@@ -84,7 +86,7 @@ async def save_results(
     将处理结果保存到数据库。
 
     分别写入 requests、field_extractions、agg_decisions 三个表。
-    如果任何步骤失败，将回滚事务并抛出异常。
+    使用 Repository 层进行数据操作，保证一致性和可测试性。
 
     Args:
         session: SQLAlchemy 异步会话。
@@ -103,15 +105,17 @@ async def save_results(
     Raises:
         DatabaseWriterError: 数据库写入失败时抛出。
     """
+    request_repo = RequestRepository(session)
+    extraction_repo = ExtractionRepository(session)
+
     logger.info(
         f"开始保存结果: trace_id={trace_id}, doc_type={doc_type}, "
         f"total_pages={total_pages}, template={template_id}@{template_version}"
     )
 
     try:
-        # 1. 插入 requests 记录
-        await _insert_request(
-            session=session,
+        # 1. 插入 requests 记录（使用 Repository）
+        await request_repo.insert(
             trace_id=trace_id,
             doc_type=doc_type,
             total_pages=total_pages,
@@ -120,21 +124,21 @@ async def save_results(
             template_id=template_id,
             template_version=template_version,
             selected_weight=selected_weight,
-            resolve_trace=resolve_trace,
+            trace=resolve_trace,
         )
         logger.info(f"requests 记录已插入: trace_id={trace_id}")
 
-        # 2. 批量插入 field_extractions
-        extraction_count = await _insert_field_extractions(
-            session=session,
+        # 2. 批量插入 field_extractions（使用 Repository）
+        extraction_count = await _insert_field_extractions_batch(
+            extraction_repo=extraction_repo,
             trace_id=trace_id,
             page_results=page_results,
         )
         logger.info(f"field_extractions 记录已插入: {extraction_count} 条")
 
-        # 3. 插入 agg_decisions
-        decision_count = await _insert_agg_decisions(
-            session=session,
+        # 3. 插入 agg_decisions（使用 Repository）
+        decision_count = await _insert_agg_decisions_batch(
+            extraction_repo=extraction_repo,
             trace_id=trace_id,
             agg_decisions=agg_decisions,
             final_fields=final_fields,
@@ -152,68 +156,8 @@ async def save_results(
         raise DatabaseWriterError(error_msg) from e
 
 
-async def _insert_request(
-    session: AsyncSession,
-    trace_id: str,
-    doc_type: str,
-    total_pages: int,
-    final_fields: dict[str, Any],
-    warnings: list[dict[str, Any]],
-    template_id: Optional[str] = None,
-    template_version: Optional[str] = None,
-    selected_weight: Optional[int] = None,
-    resolve_trace: Optional[dict[str, Any]] = None,
-) -> None:
-    """
-    插入 requests 记录。
-
-    Args:
-        session: SQLAlchemy 异步会话。
-        trace_id: 请求唯一标识。
-        doc_type: 单据类型。
-        total_pages: 总页数。
-        final_fields: 最终字段字典。
-        warnings: 警告列表。
-        template_id: 使用的模板编号。
-        template_version: 使用的模板版本。
-        selected_weight: 命中模板版本的权重。
-        resolve_trace: 分流决策追踪信息。
-    """
-    final_fields_json = json.dumps(
-        _convert_value_for_json(final_fields), ensure_ascii=False
-    )
-    warnings_json = json.dumps(warnings, ensure_ascii=False)
-    trace_json = json.dumps(_convert_value_for_json(resolve_trace), ensure_ascii=False) if resolve_trace else None
-
-    sql = text(
-        """
-        INSERT INTO requests
-        (trace_id, doc_type, total_pages, final_fields, warnings,
-         template_id, template_version, selected_weight, trace)
-        VALUES
-        (:trace_id, :doc_type, :total_pages, :final_fields, :warnings,
-         :template_id, :template_version, :selected_weight, :trace)
-        """
-    )
-
-    await session.execute(
-        sql,
-        {
-            "trace_id": trace_id,
-            "doc_type": doc_type,
-            "total_pages": total_pages,
-            "final_fields": final_fields_json,
-            "warnings": warnings_json,
-            "template_id": template_id,
-            "template_version": template_version,
-            "selected_weight": selected_weight,
-            "trace": trace_json,
-        },
-    )
-
-
-async def _insert_field_extractions(
-    session: AsyncSession,
+async def _insert_field_extractions_batch(
+    extraction_repo: ExtractionRepository,
     trace_id: str,
     page_results: list[list[dict[str, Any]]],
 ) -> int:
@@ -221,7 +165,7 @@ async def _insert_field_extractions(
     批量插入 field_extractions 记录。
 
     Args:
-        session: SQLAlchemy 异步会话。
+        extraction_repo: 提取记录仓库实例。
         trace_id: 请求唯一标识。
         page_results: 所有页的提取结果。
 
@@ -231,7 +175,7 @@ async def _insert_field_extractions(
     if not page_results:
         return 0
 
-    values_list = []
+    records = []
 
     for page_result in page_results:
         for field_result in page_result:
@@ -246,7 +190,7 @@ async def _insert_field_extractions(
                 logger.warning(f"字段结果缺少必要字段，跳过: {field_result}")
                 continue
 
-            values_list.append({
+            records.append({
                 "trace_id": trace_id,
                 "page_num": page_num,
                 "field_name": field_name,
@@ -256,34 +200,23 @@ async def _insert_field_extractions(
                 "minio_path": minio_path,
             })
 
-    if not values_list:
+    if not records:
         return 0
 
-    sql = text(
-        """
-        INSERT INTO field_extractions
-        (trace_id, page_num, field_name, extracted_value, confidence, raw_response, minio_path)
-        VALUES
-        (:trace_id, :page_num, :field_name, :extracted_value, :confidence, :raw_response, :minio_path)
-        """
-    )
-
-    await session.execute(sql, values_list)
-
-    return len(values_list)
+    return await extraction_repo.insert_field_extractions_batch(records)
 
 
-async def _insert_agg_decisions(
-    session: AsyncSession,
+async def _insert_agg_decisions_batch(
+    extraction_repo: ExtractionRepository,
     trace_id: str,
     agg_decisions: dict[str, Any],
     final_fields: dict[str, Any],
 ) -> int:
     """
-    插入 agg_decisions 记录。
+    批量插入 agg_decisions 记录。
 
     Args:
-        session: SQLAlchemy 异步会话。
+        extraction_repo: 提取记录仓库实例。
         trace_id: 请求唯一标识。
         agg_decisions: 聚合决策字典。
         final_fields: 最终字段字典（用于获取 selected_value）。
@@ -294,45 +227,27 @@ async def _insert_agg_decisions(
     if not agg_decisions:
         return 0
 
-    values_list = []
+    records = []
 
     for field_name, decision in agg_decisions.items():
         selected_page = decision.get("selected_page")
         reason = decision.get("reason", "")
         candidates = decision.get("candidates", [])
-
-        # 获取最终值
         selected_value = final_fields.get(field_name)
 
-        # 转换 candidates 为 JSON
-        candidates_json = json.dumps(
-            _convert_value_for_json(candidates), ensure_ascii=False
-        )
-
-        values_list.append({
+        records.append({
             "trace_id": trace_id,
             "field_name": field_name,
             "selected_page": selected_page,
             "selected_value": _value_to_db_string(selected_value),
             "reason": reason,
-            "candidates": candidates_json,
+            "candidates": _convert_value_for_json(candidates),
         })
 
-    if not values_list:
+    if not records:
         return 0
 
-    sql = text(
-        """
-        INSERT INTO agg_decisions
-        (trace_id, field_name, selected_page, selected_value, reason, candidates)
-        VALUES
-        (:trace_id, :field_name, :selected_page, :selected_value, :reason, :candidates)
-        """
-    )
-
-    await session.execute(sql, values_list)
-
-    return len(values_list)
+    return await extraction_repo.insert_agg_decisions_batch(records)
 
 
 async def create_tables(engine, dialect: str = "mysql") -> None:
@@ -346,7 +261,6 @@ async def create_tables(engine, dialect: str = "mysql") -> None:
         dialect: 数据库类型 ("mysql" 或 "sqlite")。
     """
     if dialect == "sqlite":
-        # SQLite 语法
         create_requests = """
         CREATE TABLE IF NOT EXISTS requests (
             trace_id VARCHAR(64) PRIMARY KEY,
@@ -425,7 +339,6 @@ async def create_tables(engine, dialect: str = "mysql") -> None:
         ON field_extractions(trace_id, page_num)
         """
     else:
-        # MySQL 语法
         create_requests = """
         CREATE TABLE IF NOT EXISTS requests (
             trace_id VARCHAR(64) PRIMARY KEY,

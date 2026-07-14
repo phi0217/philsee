@@ -15,7 +15,8 @@ from fastapi.responses import JSONResponse
 
 from online.core.database import init_database, close_database
 from online.core.trace_manager import get_trace_manager
-from online.api.routers import extraction, template_generator
+from online.api.routers import extraction
+from online.routers import template_generator
 
 # 加载 .env 文件
 load_dotenv()
